@@ -1,4 +1,4 @@
-import { App, FileSystemAdapter, FileView, MarkdownRenderChild, MarkdownView, Notice, Plugin, PluginSettingTab, Setting, TFile, debounce, getAllTags, loadMathJax } from "obsidian";
+import { App, FileSystemAdapter, FileView, MarkdownRenderChild, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile, debounce, getAllTags, loadMathJax } from "obsidian";
 import { spawn, ChildProcessWithoutNullStreams } from "child_process";
 import * as path from "path";
 import { DEFAULT_SETTINGS, DEFAULT_SLOTS, ERASER_SIZES, Ignored, InkSettings, NOT_IGNORED, PAGE_LINES, ignoredFor, isDarkTheme, mmToPx } from "./settings";
@@ -64,6 +64,47 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
       this.save();
     } });
     this.addCommand({ id: "undo-ink", name: "Undo ink", callback: () => this.command("undo") });
+    this.addCommand({
+      id: "select-all-ink",
+      name: "Select all ink on this page",
+      checkCallback: (checking) => {
+        if (!this.inkKind()) return false;
+        if (!checking) {
+          this.settings.tool = "lasso";
+          this.save();
+          this.command("select-all");
+        }
+        return true;
+      },
+    });
+    this.addCommand({
+      id: "clear-page-ink",
+      name: "Erase all ink on this page",
+      checkCallback: (checking) => {
+        if (!this.inkKind()) return false;
+        if (!checking) new ConfirmModal(this.app, "Erase all ink on this page?", "Undo brings it back.", "Erase all", () => this.command("clear-ink")).open();
+        return true;
+      },
+    });
+    this.addCommand({
+      id: "copy-ink-as-picture",
+      name: "Copy selected ink as a picture",
+      checkCallback: (checking) => this.selectionCommand(checking, () => this.command("copy-image")),
+    });
+    this.addCommand({
+      id: "pointer-tool",
+      name: "Pointer (the pen works the note like a mouse)",
+      callback: () => { this.settings.tool = "pointer"; this.save(); },
+    });
+    this.addCommand({
+      id: "toggle-draw-with-touch",
+      name: "Toggle draw with touch",
+      callback: () => {
+        this.settings.touchInk = !this.settings.touchInk;
+        this.save();
+        new Notice(this.settings.touchInk ? "Draw with touch on: your finger inks" : "Draw with touch off");
+      },
+    });
     this.addCommand({
       id: "toggle-ink-tools-for-note",
       name: "Turn ink tools off/on for this note",
@@ -189,6 +230,8 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
     // A pen hovering over the note arms the overlay so the stroke goes to Windows Ink.
     this.registerDomEvent(document, "pointermove", (e: PointerEvent) => this.onPointer(e), { capture: true });
     this.registerDomEvent(document, "pointerover", (e: PointerEvent) => this.onPointer(e), { capture: true });
+    // Selected ink and the keyboard, like OneNote: Delete, Esc, Ctrl+C / X / D, arrow keys (Ctrl+V with the lasso).
+    this.registerDomEvent(document, "keydown", (e: KeyboardEvent) => this.onInkKey(e), { capture: true });
     // A pen-down that Obsidian sees over the ink area went past the ink layer: say where (for the log).
     this.registerDomEvent(document, "pointerdown", (e: PointerEvent) => {
       const r = this.inkArea;
@@ -318,6 +361,7 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
       smooth: s.smooth,
       scratchOut: s.scratchOut,
       shapes: s.shapes,
+      touchInk: s.touchInk,
     });
     this.send({ type: "ruler", visible: s.ruler });
   }
@@ -1495,8 +1539,36 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
     set("--oni-rule-phase", `${phase.toFixed(2)}px`);
   }
 
+  /**
+   * Keys act on the selected ink while there is some (that's what's selected, even with the cursor in the
+   * text): Delete/Backspace, Esc, Ctrl+C, Ctrl+X, Ctrl+D, arrows (Shift: 10 px). Ctrl+V pastes ink with the
+   * lasso tool picked; otherwise every key is the note's as usual.
+   */
+  private onInkKey(e: KeyboardEvent) {
+    if (!this.inkKind() || document.querySelector(".modal-container")) return;
+    const mod = e.ctrlKey || e.metaKey;
+    const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    const selected = this.selected > 0;
+    let run: (() => void) | null = null;
+    if (selected && !mod && (key === "Delete" || key === "Backspace")) run = () => this.command("deleteSelection");
+    else if (selected && key === "Escape") run = () => this.command("deselect");
+    else if (selected && mod && key === "c") run = () => this.command("copy");
+    else if (selected && mod && key === "x") run = () => this.command("cut");
+    else if (selected && mod && key === "d") run = () => this.command("duplicate");
+    else if (selected && !mod && key.startsWith("Arrow")) {
+      const d = e.shiftKey ? 10 : 1;
+      const x = key === "ArrowLeft" ? -d : key === "ArrowRight" ? d : 0, y = key === "ArrowUp" ? -d : key === "ArrowDown" ? d : 0;
+      run = () => this.command("nudge", { x, y });
+    } else if (mod && key === "v" && this.settings.tool === "lasso") run = () => this.pasteInk();
+    if (!run) return;
+    e.preventDefault();
+    e.stopPropagation();
+    run();
+  }
+
   private onPointer(e: PointerEvent) {
-    if (e.pointerType !== "pen" || !this.enabled || this.toolbar.popoverOpen) return;
+    // The pointer tool leaves the pen to Obsidian, like a mouse.
+    if (e.pointerType !== "pen" || !this.enabled || this.toolbar.popoverOpen || this.settings.tool === "pointer") return;
     const r = this.inkArea;
     if (!r) return;
     if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) return;
@@ -1539,6 +1611,25 @@ function uiHoles(area: DOMRect, view: FileView): { x: number; y: number; w: numb
     holes.push({ x: Math.floor(r.left), y: Math.floor(r.top), w: Math.ceil(r.width) + 1, h: Math.ceil(r.height) + 1, what: `${el.tagName.toLowerCase()}.${Array.from(el.classList).join(".")}` });
   }
   return holes;
+}
+
+/** A yes/no question before something big (built from Obsidian's own modal and buttons). */
+class ConfirmModal extends Modal {
+  constructor(app: App, private title: string, private detail: string, private yes: string, private onYes: () => void) {
+    super(app);
+  }
+
+  onOpen() {
+    this.setTitle(this.title);
+    this.contentEl.createEl("p", { text: this.detail });
+    new Setting(this.contentEl)
+      .addButton((b) => b.setButtonText("Cancel").onClick(() => this.close()))
+      .addButton((b) => b.setButtonText(this.yes).setWarning().onClick(() => { this.close(); this.onYes(); }));
+  }
+
+  onClose() {
+    this.contentEl.empty();
+  }
 }
 
 /** Mirrors OneNote's Options › Advanced › Pen, for the options Windows Ink can honour. */

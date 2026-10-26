@@ -29,7 +29,7 @@ export const PAGE_LINES: { id: string; label: string; pitch: number; grid?: bool
  * Also OneNote's Ink Editor pen ("editor-pen"), Insert space ("space"), the laser pointer, and the
  * shape gallery ("shape:rectangle"...).
  */
-export type Tool = "slot" | "eraser-stroke" | "eraser-point" | "lasso" | "text-pen" | "editor-pen" | "space" | "laser" | `shape:${string}`;
+export type Tool = "slot" | "eraser-stroke" | "eraser-point" | "lasso" | "pointer" | "text-pen" | "editor-pen" | "space" | "laser" | `shape:${string}`;
 
 /** One pen in the toolbar's pen gallery. Sizes are in millimetres, like OneNote's thickness menu. */
 export interface PenSlot {
@@ -52,6 +52,8 @@ export interface InkSettings {
   eraserEnd: "stroke" | "point";
   eraserSize: number;
   showToolbar: boolean;
+  /** "Draw with touch": a finger inks too (the ink layer then takes all touch over the page). */
+  touchInk: boolean;
   recent: string[];
   /** Eraser the eraser button picks up when tapped from another tool. */
   lastEraser: "eraser-stroke" | "eraser-point";
@@ -131,6 +133,7 @@ export const DEFAULT_SETTINGS: InkSettings = {
   eraserEnd: "stroke",
   eraserSize: 3,
   showToolbar: true,
+  touchInk: false,
   recent: [],
   lastEraser: "eraser-stroke",
   ruled: false,

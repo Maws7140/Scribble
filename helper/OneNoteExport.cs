@@ -83,6 +83,7 @@ public static class OneNoteExport
         var previous = PageObjects(app, pageId);
         var strokes = LoadInk(req.InkPath);
         if (req.WhiteInkToBlack) WhiteToBlack(strokes);
+        SeeThroughHighlighters(strokes);
         double originX = Math.Min(req.ContentLeft, strokes.Count > 0 ? strokes.GetBounds().Left : req.ContentLeft);
         double X(double px) => PageLeft + (px - originX) * PtPerPx;
         double Y(double px) => PageTop + Math.Max(0, px - req.OriginY) * PtPerPx;
@@ -173,6 +174,38 @@ public static class OneNoteExport
             var da = s.DrawingAttributes.Clone();
             da.Color = Color.FromArgb(c.A, 0, 0, 0);
             s.DrawingAttributes = da;
+        }
+    }
+
+    /// <summary>
+    /// OneNote's API drops the highlighter flag (a highlighter arrived as solid yellow ink) but keeps a
+    /// colour's transparency: highlighters go over half see-through. A pull turns them back (see
+    /// <see cref="HighlightersFromOneNote"/>).
+    /// </summary>
+    static void SeeThroughHighlighters(StrokeCollection strokes)
+    {
+        foreach (var s in strokes)
+        {
+            if (!s.DrawingAttributes.IsHighlighter || s.DrawingAttributes.Color.A < 255) continue;
+            var da = s.DrawingAttributes.Clone();
+            da.Color = Color.FromArgb(HighlighterAlpha, da.Color.R, da.Color.G, da.Color.B);
+            s.DrawingAttributes = da;
+        }
+    }
+
+    internal const byte HighlighterAlpha = 0x80;
+
+    /// <summary>Pulled ink: half see-through strokes with a flat tip are highlighters (as sent, or drawn so in OneNote).</summary>
+    internal static void HighlightersFromOneNote(StrokeCollection strokes)
+    {
+        foreach (var s in strokes)
+        {
+            var da = s.DrawingAttributes;
+            if (da.IsHighlighter || da.Color.A == 255 || da.StylusTip != StylusTip.Rectangle) continue;
+            var copy = da.Clone();
+            copy.Color = Color.FromArgb(255, da.Color.R, da.Color.G, da.Color.B);
+            copy.IsHighlighter = true;
+            s.DrawingAttributes = copy;
         }
     }
 

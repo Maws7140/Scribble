@@ -58,7 +58,9 @@ public static class WindowsInk
             attrs.PencilProperties.Opacity = Math.Clamp(color.A / 255.0, 0.01, 1);
             attrs.IgnorePressure = ignorePressure;
             builder.SetDefaultDrawingAttributes(attrs);
-            var inkPoints = points.Select(p => new Windows.UI.Input.Inking.InkPoint(new Windows.Foundation.Point(p.X, p.Y), ignorePressure ? 0.5f : p.PressureFactor)).ToList();
+            var tilt = Tilt(points);
+            var inkPoints = points.Select((p, i) => new Windows.UI.Input.Inking.InkPoint(new Windows.Foundation.Point(p.X, p.Y), ignorePressure ? 0.5f : p.PressureFactor,
+                tilt?[i].x ?? 0, tilt?[i].y ?? 0, 0)).ToList();
             if (inkPoints.Count == 1) inkPoints.Add(inkPoints[0]);
             var stroke = builder.CreateStrokeFromInkPoints(inkPoints, System.Numerics.Matrix3x2.Identity);
             stroke.DrawingAttributes = attrs;
@@ -99,6 +101,33 @@ public static class WindowsInk
             if (e is COMException or TypeLoadException or DllNotFoundException or InvalidCastException && renderer == null) unavailable = true;
             return null;
         }
+    }
+
+    /// <summary>
+    /// The pen's tilt at each point (degrees, -90..90 across and down), from the angles the pen reports, so
+    /// Windows' pencil shades with the side of the lead like OneNote's. Null when the stroke has no angles.
+    /// </summary>
+    static (float x, float y)[]? Tilt(System.Windows.Input.StylusPointCollection points)
+    {
+        var d = points.Description;
+        var az = System.Windows.Input.StylusPointProperties.AzimuthOrientation;
+        var alt = System.Windows.Input.StylusPointProperties.AltitudeOrientation;
+        var tx = System.Windows.Input.StylusPointProperties.XTiltOrientation;
+        var ty = System.Windows.Input.StylusPointProperties.YTiltOrientation;
+        double Deg(System.Windows.Input.StylusPoint p, System.Windows.Input.StylusPointProperty prop)
+        {
+            var info = d.GetPropertyInfo(prop);
+            return p.GetPropertyValue(prop) / (info.Resolution > 0 ? info.Resolution : 1);
+        }
+        if (d.HasProperty(tx) && d.HasProperty(ty))
+            return points.Select(p => ((float)Math.Clamp(Deg(p, tx), -90, 90), (float)Math.Clamp(Deg(p, ty), -90, 90))).ToArray();
+        if (!d.HasProperty(az) || !d.HasProperty(alt)) return null;
+        return points.Select(p =>
+        {
+            double a = Deg(p, az) * Math.PI / 180, h = Math.Clamp(Deg(p, alt), 1, 90) * Math.PI / 180;
+            double x = Math.Atan(Math.Cos(a) / Math.Tan(h)) * 180 / Math.PI, y = Math.Atan(Math.Sin(a) / Math.Tan(h)) * 180 / Math.PI;
+            return ((float)Math.Clamp(x, -90, 90), (float)Math.Clamp(y, -90, 90));
+        }).ToArray();
     }
 
     static void Init()

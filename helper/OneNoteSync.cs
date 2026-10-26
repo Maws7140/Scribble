@@ -144,6 +144,7 @@ public static class OneNoteSync
         {
             var strokes = InkData(app, pageId, d);
             if (strokes == null) continue;
+            OneNoteExport.HighlightersFromOneNote(strokes);
             var pos = d.Element(one + "Position");
             Place(strokes, Num(pos?.Attribute("x")), Num(pos?.Attribute("y")));
         }

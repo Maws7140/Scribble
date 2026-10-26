@@ -91,7 +91,8 @@ public sealed partial class OverlayWindow : Window
         // Only the pen inks. Touch (palm) and real mouse input are swallowed while armed.
         ink.PreviewStylusDown += (_, e) =>
         {
-            if (e.StylusDevice.TabletDevice?.Type == TabletDeviceType.Touch) e.Handled = true;
+            // (A finger inks too with "draw with touch" on.)
+            if (e.StylusDevice.TabletDevice?.Type == TabletDeviceType.Touch && !touchInk) e.Handled = true;
         };
         ink.PreviewMouseDown += (_, e) =>
         {
@@ -99,6 +100,7 @@ public sealed partial class OverlayWindow : Window
         };
         ink.SelectionMoved += (_, _) => { AnchorSelection(); Changed(); };
         ink.SelectionResized += (_, _) => { AnchorSelection(); Changed(); };
+        InitSelection();
         InitInkToShape();
         InitWriting();
         InitPageTools();
@@ -182,6 +184,9 @@ public sealed partial class OverlayWindow : Window
                 break;
             case "redo":
                 Restore(historyIndex + 1);
+                break;
+            case "deselect" or "cut" or "duplicate" or "nudge" or "flip" or "select-all" or "clear-ink" or "copy-image":
+                HandleSelectionCommand(cmd);
                 break;
             case "deleteSelection":
                 var selected = ink.GetSelectedStrokes();
@@ -350,9 +355,17 @@ public sealed partial class OverlayWindow : Window
         if (lastTool != null) ApplyTool(lastTool);
     }
 
+    /// <summary>"Draw with touch": a finger inks, and the layer stays armed so the first touch isn't lost.</summary>
+    bool touchInk;
+
     void ApplyTool(Command cmd)
     {
         lastTool = cmd;
+        sideLasso = false; // a new tool ends a side-button lasso
+        bool wasTouchInk = touchInk;
+        touchInk = cmd.TouchInk && cmd.Tool != "pointer";
+        if (touchInk) Arm();
+        else if (wasTouchInk || cmd.Tool == "pointer") DisarmSoon();
         // The Ink to Text pen writes like a pen, but its ink becomes text, so no shapes or scratch-out.
         // The Ink Editor pen is the same, plus editing gestures on the typed text.
         bool wasTextPen = textPen;
@@ -416,6 +429,8 @@ public sealed partial class OverlayWindow : Window
             "lasso" => InkCanvasEditingMode.Select,
             // The pen drives these itself (PageTools.cs).
             "space" or "laser" => InkCanvasEditingMode.None,
+            // The pen works Obsidian like a mouse (the plugin doesn't arm the layer for it).
+            "pointer" => InkCanvasEditingMode.None,
             _ when IsShapeTool => InkCanvasEditingMode.None,
             _ => gestures ? InkCanvasEditingMode.InkAndGesture : InkCanvasEditingMode.Ink,
         };
@@ -577,6 +592,8 @@ public sealed partial class OverlayWindow : Window
         double dip = VisualTreeHelper.GetDpi(this).DpiScaleX;
         SizeInk();
         CutHoles(l, k, rect.w / dip, rect.h / dip);
+        // The rotate handle follows its selection as the page scrolls or zooms.
+        if (rotateKnob.Visibility == Visibility.Visible) PlaceRotateKnob();
         PencilScale(scale.ScaleX * dip);
     }
 
@@ -684,7 +701,7 @@ public sealed partial class OverlayWindow : Window
     void Disarm()
     {
         disarmTimer.Stop();
-        if (!armed) return;
+        if (!armed || touchInk) return;
         // Never drop the pen mid-stroke.
         if (Stylus.CurrentStylusDevice is { InAir: false }) { disarmTimer.Start(); return; }
         armed = false;

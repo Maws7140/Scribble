@@ -139,12 +139,17 @@ export class Toolbar {
     });
     eraser.toggleClass("is-active", erasing);
 
-    const lasso = this.button("lasso", "Lasso select", () => {
+    const lasso = this.button("lasso", "Lasso select (or hold the pen's side button with any tool)", () => {
       s.tool = "lasso";
       this.host.save();
     });
     lasso.toggleClass("is-active", s.tool === "lasso");
-    if (s.tool === "lasso") this.selectionActions();
+    this.button("mouse-pointer-2", "Pointer: the pen works the note like a mouse (links, buttons, selecting text)", () => {
+      s.tool = "pointer";
+      this.host.save();
+    }).toggleClass("is-active", s.tool === "pointer");
+    // Selected ink (lassoed with the side button too) gets its actions whatever the tool.
+    if (s.tool === "lasso" || this.host.selectionCount() > 0) this.selectionActions();
 
     this.divider();
     this.pageTools();
@@ -176,6 +181,10 @@ export class Toolbar {
       }, right);
       lines.toggleClass("is-active", s.pageLines !== "none");
     }
+    this.button("hand", s.touchInk ? "Draw with touch is on: your finger inks (tap to turn off)" : "Draw with touch: let your finger ink too", () => {
+      s.touchInk = !s.touchInk;
+      this.host.save();
+    }, right).toggleClass("is-active", s.touchInk);
     this.button(this.host.layerOn() ? "eye" : "eye-off", this.host.layerOn() ? "Hide ink" : "Show ink", () => {
       this.host.toggleLayer();
       this.render();
@@ -246,7 +255,13 @@ export class Toolbar {
     const more = this.button("more-horizontal", "More", () => {
       const menu = new Menu();
       if (note) menu.addItem((i) => i.setTitle("Copy as text").setIcon("clipboard-type").onClick(() => host.inkToText("copy")));
+      menu.addItem((i) => i.setTitle("Copy as picture").setIcon("image").onClick(() => host.command("copy-image")));
+      menu.addItem((i) => i.setTitle("Cut").setIcon("scissors").onClick(() => host.command("cut")));
+      menu.addItem((i) => i.setTitle("Duplicate").setIcon("copy-plus").onClick(() => host.command("duplicate")));
       menu.addItem((i) => i.setTitle("Paste ink").setIcon("clipboard-paste").onClick(() => host.pasteInk()));
+      menu.addSeparator();
+      menu.addItem((i) => i.setTitle("Flip horizontally").setIcon("flip-horizontal-2").onClick(() => host.command("flip", { purpose: "horizontal" })));
+      menu.addItem((i) => i.setTitle("Flip vertically").setIcon("flip-vertical-2").onClick(() => host.command("flip", { purpose: "vertical" })));
       menu.addSeparator();
       menu.addItem((i) => i.setTitle("Thicker").setIcon("plus").onClick(() => host.command("pen-scale", { factor: 1.25 })));
       menu.addItem((i) => i.setTitle("Thinner").setIcon("minus").onClick(() => host.command("pen-scale", { factor: 0.8 })));

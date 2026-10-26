@@ -48,6 +48,7 @@ public sealed class Command
     public bool Smooth { get; set; } = true;
     public bool ScratchOut { get; set; } = true;
     public bool Shapes { get; set; } = true;     // draw-and-hold ink-to-shape
+    public bool TouchInk { get; set; }           // "draw with touch": a finger inks too
 
     // "lines": where each source line sits (CSS px from the text column top), in the given mode.
     public string? Mode { get; set; }            // source | preview
