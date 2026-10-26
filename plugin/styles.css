@@ -14,8 +14,10 @@
   pointer-events: none;
 }
 
-/* Notebook rule lines; pitch and phase follow the body text (set by the plugin). */
-.oni-ruled {
+/* Notebook rule lines; pitch and phase follow the body text (set by the plugin). On a kept-width page
+   (see .oni-page) they're drawn by its ::before, which covers the whole width the ink can use. */
+.oni-ruled,
+.oni-page.oni-ruled::before {
   --oni-rule-color: color-mix(in srgb, var(--text-faint) 45%, transparent);
   background-image: linear-gradient(to bottom, transparent calc(100% - 1px), var(--oni-rule-color) calc(100% - 1px));
   background-size: 100% var(--oni-rule-pitch, 24px);
@@ -24,7 +26,8 @@
 }
 
 /* Grid lines: the same pitch across and down. */
-.oni-grid {
+.oni-grid,
+.oni-page.oni-grid::before {
   --oni-rule-color: color-mix(in srgb, var(--text-faint) 35%, transparent);
   background-image:
     linear-gradient(to bottom, transparent calc(100% - 1px), var(--oni-rule-color) calc(100% - 1px)),
@@ -491,14 +494,22 @@
 .oni-page {
   position: relative;
   flex-shrink: 0;
+  /* Its ::before sits behind the text but in front of the pane's background. */
+  isolation: isolate;
 }
+.oni-page.oni-ruled,
+.oni-page.oni-grid {
+  background-image: none;
+}
+/* From the pane's left edge out to the furthest ink: the rule lines, and how far the note scrolls. */
 .oni-page::before {
   content: "";
   position: absolute;
   top: 0;
-  left: calc(var(--oni-page-reach, 0px) - 1px);
-  width: 1px;
-  height: 1px;
+  bottom: 0;
+  left: calc(-1 * var(--oni-page-from, 0px));
+  width: calc(var(--oni-page-from, 0px) + var(--oni-page-reach, 0px));
+  z-index: -1;
   pointer-events: none;
 }
 .oni-ink-svg {

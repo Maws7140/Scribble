@@ -1528,15 +1528,12 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
   }
 
   /**
-   * Make the note as tall as its ink, like it already is for its text: keep a writing margin of blank
-   * page below the lowest stroke, so writing near the bottom always leaves room to scroll on.
-   * The space is a ::after spacer on the sizer (see styles.css), so Obsidian's own DOM is untouched.
-   */
-  /**
-   * A note keeps the page it has across the whole editor area: in a split pane (or with a sidebar open) the
-   * text column keeps its width and its place, and the note scrolls sideways to the rest, out to the ink
-   * (never past the screen). Ink is placed from the text column, so a narrower column re-wrapped the text
-   * under it and the ink drifted off the words; ink in the margins went past the pane's edge.
+   * A note keeps the page it has across the whole editor area: in a split pane the page (the sizer, which
+   * the ink is placed from) keeps its width and its place, and the note scrolls sideways to the rest, out to
+   * the ink (never past the screen). A narrower page re-wrapped and re-centred the text under the ink, so
+   * the ink drifted off the words, and ink in the margins went past the pane's edge.
+   * Themes differ in what the page is: Obsidian's is the readable column, centred; Minimal's is the full
+   * width with the column centred inside it. Either way it's the page the theme gives at full width.
    */
   private keepPageWidth(view: MarkdownView, sizer: HTMLElement, inkPath: string | null) {
     const scroller = sizer.closest<HTMLElement>(".cm-scroller, .markdown-preview-view");
@@ -1547,37 +1544,51 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
       return;
     }
     const cs = getComputedStyle(scroller);
-    const pad = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
-    const scrollbar = scroller.offsetWidth - scroller.clientWidth;
-    // The note's width across the whole editor area (what it has unsplit), and the column in it.
-    const inner = Math.max(200, Math.round(root.getBoundingClientRect().width - scrollbar - pad));
-    const readable = !!sizer.closest(".is-readable-line-width");
-    const lineWidth = parseFloat(getComputedStyle(sizer).getPropertyValue("--file-line-width")) || 700;
-    const column = Math.round(readable ? Math.min(inner, lineWidth) : inner);
-    const margin = Math.floor((inner - column) / 2);
-    // Out to the ink on either side (column px), never wider than the screen.
+    const padLeft = parseFloat(cs.paddingLeft) || 0;
+    const pad = padLeft + (parseFloat(cs.paddingRight) || 0);
+    // What the note's text area would be across the whole editor area: this pane's, plus what the split takes.
+    const wider = Math.max(0, root.getBoundingClientRect().width - view.containerEl.getBoundingClientRect().width);
+    const inner = Math.max(200, Math.round(scroller.clientWidth - pad + wider));
     const ink = this.inkSides.get(inkPath);
-    const most = Math.max(inner, Math.round((window.screen?.availWidth || inner) - scrollbar - pad));
-    const left = Math.max(0, Math.min(Math.max(margin, ink && ink.left < 0 ? Math.ceil(-ink.left) + 24 : 0), most - column));
-    const reach = Math.max(column + margin, Math.min(most - left, ink ? Math.ceil(ink.right) + 24 : 0));
-    const key = `${column}|${left}|${margin}|${reach}`;
+    const readable = sizer.closest(".is-readable-line-width") !== null;
+    const key = `${inner}|${readable}|${ink?.left ?? 0}|${ink?.right ?? 0}`;
     if (sizer.dataset.oniPage === key) return;
+
+    // The theme's own page width at that size: its max-width (a length, a percentage, or none).
     const first = !sizer.hasClass("oni-page");
+    for (const p of ["width", "min-width", "max-width"]) sizer.style.removeProperty(p);
+    const max = getComputedStyle(sizer).maxWidth;
+    const page = Math.round(Math.min(inner,
+      max.endsWith("px") ? parseFloat(max) : max.endsWith("%") ? (parseFloat(max) / 100) * inner : inner));
+    const margin = Math.floor((inner - page) / 2);
+    // Out to the ink on either side (page px), never wider than the screen.
+    const most = Math.max(inner, Math.round((window.screen?.availWidth || inner) - pad));
+    const left = Math.max(0, Math.min(Math.max(margin, ink && ink.left < 0 ? Math.ceil(-ink.left) + 24 : 0), most - page));
+    const reach = Math.max(page + margin, Math.min(most - left, ink ? Math.ceil(ink.right) + 24 : 0));
+
     sizer.dataset.oniPage = key;
     sizer.addClass("oni-page");
     scroller.addClass("oni-page-scroller");
-    sizer.style.setProperty("width", `${column}px`);
-    sizer.style.setProperty("min-width", `${column}px`);
-    sizer.style.setProperty("max-width", `${column}px`);
+    sizer.style.setProperty("width", `${page}px`);
+    sizer.style.setProperty("min-width", `${page}px`);
+    sizer.style.setProperty("max-width", `${page}px`);
     sizer.style.setProperty("margin-left", `${left}px`);
     sizer.style.setProperty("margin-right", `${margin}px`);
-    // Scrolls out as far as the ink goes (a margin alone doesn't widen what a page scrolls over).
-    sizer.style.setProperty("--oni-page-reach", `${reach}px`);
-    // A narrow pane opens on the text, not on the empty margin left of it.
-    if (first && scroller.clientWidth < left + column + margin) {
-      scroller.scrollLeft = Math.max(0, left - Math.max(0, (scroller.clientWidth - pad - column) / 2));
+    // The rule lines cover all of it, out to the scroller's edges (the ink can go anywhere), and it scrolls
+    // out as far as the ink goes (a margin alone doesn't widen what a page scrolls over): see .oni-page::before.
+    sizer.style.setProperty("--oni-page-from", `${left + padLeft}px`);
+    sizer.style.setProperty("--oni-page-reach", `${reach + pad - padLeft}px`);
+    // A narrow pane opens on the middle of the page (where the text is), not on its left edge.
+    if (first && scroller.clientWidth < scroller.scrollWidth) {
+      scroller.scrollLeft = Math.max(0, padLeft + left + page / 2 - scroller.clientWidth / 2);
     }
   }
+
+  /**
+   * Make the note as tall as its ink, like it already is for its text: keep a writing margin of blank
+   * page below the lowest stroke, so writing near the bottom always leaves room to scroll on.
+   * The space is a ::after spacer on the sizer (see styles.css), so Obsidian's own DOM is untouched.
+   */
 
   unkeepPageWidths() {
     document.querySelectorAll<HTMLElement>(".oni-page").forEach((s) => this.unkeepPageWidth(s));
@@ -1586,7 +1597,7 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
   private unkeepPageWidth(sizer: HTMLElement) {
     sizer.removeClass("oni-page");
     delete sizer.dataset.oniPage;
-    for (const p of ["width", "min-width", "max-width", "margin-left", "margin-right", "--oni-page-reach"]) sizer.style.removeProperty(p);
+    for (const p of ["width", "min-width", "max-width", "margin-left", "margin-right", "--oni-page-from", "--oni-page-reach"]) sizer.style.removeProperty(p);
     sizer.closest(".oni-page-scroller")?.removeClass("oni-page-scroller");
   }
 
