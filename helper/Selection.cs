@@ -71,10 +71,12 @@ public sealed partial class OverlayWindow
             else if (sideLasso && !side)
             {
                 // Without the button: on the selection it moves or resizes it; anywhere else the pen draws again.
-                if (ink.GetSelectedStrokes().Count > 0 && ink.HitTestSelection(e.GetPosition(ink)) != InkCanvasSelectionHitResult.None) return;
-                EndSideLasso();
+                if (ink.GetSelectedStrokes().Count == 0 || ink.HitTestSelection(e.GetPosition(ink)) == InkCanvasSelectionHitResult.None) EndSideLasso();
             }
+            if (!e.Handled) StartDrag(e);
         };
+        ink.PreviewStylusMove += (_, e) => { if (drag != InkCanvasSelectionHitResult.None && !e.InAir) { DragTo(e.GetPosition(ink)); e.Handled = true; } };
+        ink.PreviewStylusUp += (_, e) => { if (drag != InkCanvasSelectionHitResult.None) { EndDrag(); e.Handled = true; } };
 
         root.Children.Add(rotateStem);
         root.Children.Add(rotateKnob);
@@ -106,6 +108,84 @@ public sealed partial class OverlayWindow
         sideLasso = false;
         ink.Select(new StrokeCollection());
         ink.EditingMode = modeBeforeLasso;
+    }
+
+    // ---------- moving and resizing the selection ----------
+
+    // WPF's own move and resize hid the strokes and showed only a box while you dragged; here the ink itself
+    // follows the pen, like OneNote. Corner handles keep the proportions, side handles stretch one way.
+    InkCanvasSelectionHitResult drag = InkCanvasSelectionHitResult.None;
+    Point dragStart;
+    Rect dragFrom, dragNow;
+
+    void StartDrag(StylusDownEventArgs e)
+    {
+        if (ink.EditingMode != InkCanvasEditingMode.Select || ink.GetSelectedStrokes().Count == 0) return;
+        var p = e.GetPosition(ink);
+        var hit = ink.HitTestSelection(p);
+        if (hit == InkCanvasSelectionHitResult.None) return;
+        drag = hit;
+        dragStart = p;
+        dragFrom = dragNow = ink.GetSelectedStrokes().GetBounds();
+        dragging = true;
+        UpdateNativeVisibility();
+        ink.CaptureStylus();
+        e.Handled = true;
+    }
+
+    void DragTo(Point p)
+    {
+        var d = p - dragStart;
+        var selected = ink.GetSelectedStrokes();
+        if (selected.Count == 0) return;
+        Rect next;
+        if (drag == InkCanvasSelectionHitResult.Selection)
+        {
+            next = new Rect(dragFrom.X + d.X, dragFrom.Y + d.Y, dragFrom.Width, dragFrom.Height);
+        }
+        else
+        {
+            bool left = drag is InkCanvasSelectionHitResult.TopLeft or InkCanvasSelectionHitResult.Left or InkCanvasSelectionHitResult.BottomLeft;
+            bool right = drag is InkCanvasSelectionHitResult.TopRight or InkCanvasSelectionHitResult.Right or InkCanvasSelectionHitResult.BottomRight;
+            bool top = drag is InkCanvasSelectionHitResult.TopLeft or InkCanvasSelectionHitResult.Top or InkCanvasSelectionHitResult.TopRight;
+            bool bottom = drag is InkCanvasSelectionHitResult.BottomLeft or InkCanvasSelectionHitResult.Bottom or InkCanvasSelectionHitResult.BottomRight;
+            double min = 4 / Zoom;
+            double w = Math.Max(min, dragFrom.Width + (right ? d.X : left ? -d.X : 0));
+            double h = Math.Max(min, dragFrom.Height + (bottom ? d.Y : top ? -d.Y : 0));
+            if ((left || right) && (top || bottom) && dragFrom.Width > 0 && dragFrom.Height > 0)
+            {
+                // Corners: the same scale both ways.
+                double s = Math.Max(min / Math.Min(dragFrom.Width, dragFrom.Height), (w / dragFrom.Width + h / dragFrom.Height) / 2);
+                w = dragFrom.Width * s;
+                h = dragFrom.Height * s;
+            }
+            double x = left ? dragFrom.Right - w : dragFrom.X;
+            double y = top ? dragFrom.Bottom - h : dragFrom.Y;
+            next = new Rect(x, y, w, h);
+        }
+        // From where it is now to where it should be (outlines keep their thickness).
+        double sx = dragNow.Width > 0 ? next.Width / dragNow.Width : 1, sy = dragNow.Height > 0 ? next.Height / dragNow.Height : 1;
+        var m = new Matrix(sx, 0, 0, sy, next.X - dragNow.X * sx, next.Y - dragNow.Y * sy);
+        if (!m.IsIdentity) selected.Transform(m, false);
+        dragNow = next;
+        PlaceRotateKnob();
+    }
+
+    void EndDrag()
+    {
+        var moved = dragNow != dragFrom;
+        drag = InkCanvasSelectionHitResult.None;
+        dragging = false;
+        ink.ReleaseStylusCapture();
+        var selected = ink.GetSelectedStrokes();
+        ink.Select(selected); // the selection box around where the ink is now
+        if (moved)
+        {
+            AnchorSelection();
+            Changed();
+        }
+        UpdateNativeVisibility();
+        PlaceRotateKnob();
     }
 
     // ---------- turning the selection ----------
