@@ -760,8 +760,11 @@ public sealed partial class OverlayWindow : Window
     /// <summary>Tell the plugin how far down the ink reaches, so the note can grow to fit it.</summary>
     void SendExtent()
     {
-        double bottom = ink.Strokes.Count == 0 ? 0 : Math.Ceiling(ink.Strokes.GetBounds().Bottom);
-        Protocol.Send(new { type = "extent", path = inkPath, bottom });
+        var b = ink.Strokes.Count == 0 ? Rect.Empty : ink.Strokes.GetBounds();
+        double bottom = b.IsEmpty ? 0 : Math.Ceiling(b.Bottom);
+        // How far it reaches sideways too: a narrower pane keeps the page wide enough to scroll to it.
+        double left = b.IsEmpty ? 0 : Math.Floor(b.Left), right = b.IsEmpty ? 0 : Math.Ceiling(b.Right);
+        Protocol.Send(new { type = "extent", path = inkPath, bottom, left, right });
         // Whatever moved the ink also changes the note's copy of it.
         SchedulePublish();
     }

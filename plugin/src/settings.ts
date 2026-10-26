@@ -56,6 +56,10 @@ export interface InkSettings {
   touchInk: boolean;
   /** Source mode (raw Markdown, not Live Preview) shows no ink and takes no writing. */
   hideInkInSource: boolean;
+  /** In a split pane (or with a sidebar open) the note keeps its full-width page and scrolls sideways. */
+  keepPageWidth: boolean;
+  /** The ink tools sit in the Editing Toolbar plugin's top bar instead of a bar of their own. */
+  inEditingToolbar: boolean;
   recent: string[];
   /** Eraser the eraser button picks up when tapped from another tool. */
   lastEraser: "eraser-stroke" | "eraser-point";
@@ -137,6 +141,8 @@ export const DEFAULT_SETTINGS: InkSettings = {
   showToolbar: true,
   touchInk: false,
   hideInkInSource: true,
+  keepPageWidth: true,
+  inEditingToolbar: false,
   recent: [],
   lastEraser: "eraser-stroke",
   ruled: false,

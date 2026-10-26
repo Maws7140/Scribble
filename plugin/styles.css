@@ -53,6 +53,27 @@
   flex-shrink: 0;
 }
 
+/* In the Editing Toolbar plugin's top bar (a setting): one group at its start, in its look. Its bar wraps
+   to a second row in a narrow pane rather than run under the edge (it sizes its own buttons only). */
+.oni-et-host#editingToolbarModalBar.top {
+  flex-wrap: wrap;
+  height: auto;
+  min-height: calc(var(--toolbar-icon-size, 18px) + 18px);
+}
+.oni-toolbar.oni-in-et {
+  height: calc(var(--toolbar-icon-size, 18px) + 18px);
+  padding: 0 var(--size-4-1) 0 0;
+  margin-right: var(--size-4-1);
+  border-bottom: none;
+  border-right: var(--border-width) solid var(--divider-color);
+  background-color: transparent;
+  overflow: visible;
+}
+.oni-toolbar.oni-in-et .oni-right {
+  margin-left: 0;
+  padding-left: var(--size-2-1);
+}
+
 .oni-toolbar.is-off .oni-pen,
 .oni-toolbar.is-off .oni-add {
   opacity: 0.5;
@@ -462,6 +483,23 @@
 /* The note's own copy of its ink (drawn in the page so it scrolls with the text; see domink.ts). */
 .oni-ink-host {
   position: relative;
+}
+/* A split pane keeps the note's full-width page (see keepPageWidth) and scrolls sideways to the rest. */
+.oni-page-scroller {
+  overflow-x: auto !important;
+}
+.oni-page {
+  position: relative;
+  flex-shrink: 0;
+}
+.oni-page::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: calc(var(--oni-page-reach, 0px) - 1px);
+  width: 1px;
+  height: 1px;
+  pointer-events: none;
 }
 .oni-ink-svg {
   position: absolute;

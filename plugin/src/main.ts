@@ -40,6 +40,8 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
   private linesPath = "";
   /** Lowest ink point per note (CSS px from the top of the text column), reported by the helper. */
   private inkBottom = new Map<string, number>();
+  /** How far each note's ink reaches left and right of its text column (CSS px), for the page width in split panes. */
+  private inkSides = new Map<string, { left: number; right: number }>();
   private persist = debounce(() => this.saveData(this.settings), 500, true);
   /** Strokes selected with the lasso (the toolbar shows selection actions while there are some). */
   private selected = 0;
@@ -272,6 +274,7 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
     for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
       if (leaf.view instanceof MarkdownView) clearBlankSpace(leaf.view);
     }
+    this.unkeepPageWidths();
     this.toolbar.destroy();
     this.domInk.destroy();
     for (const proc of [this.helper, this.standby]) {
@@ -484,7 +487,7 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
     }
     let msg: {
       type?: string; canUndo?: boolean; canRedo?: boolean; scratchOut?: boolean; message?: string;
-      path?: string; bottom?: number; ok?: boolean; pageId?: string; noteKey?: string; error?: string;
+      path?: string; bottom?: number; left?: number; right?: number; ok?: boolean; pageId?: string; noteKey?: string; error?: string;
       state?: SyncState; navigated?: boolean; navigate?: boolean; pageChanged?: boolean; textChanges?: number; inkChanged?: boolean;
       changes?: TextChange[]; strokes?: number; inkWords?: number; changed?: string[];
       count?: number; id?: number; inkPath?: string; purpose?: string; lines?: RecognizedLine[];
@@ -505,7 +508,10 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
         this.scratchOutAvailable = !!msg.scratchOut;
         break;
       case "extent":
-        if (msg.path) this.inkBottom.set(msg.path, msg.bottom ?? 0);
+        if (msg.path) {
+          this.inkBottom.set(msg.path, msg.bottom ?? 0);
+          this.inkSides.set(msg.path, { left: msg.left ?? 0, right: msg.right ?? 0 });
+        }
         break;
       case "onenote-result":
         this.onSent(msg);
@@ -1237,6 +1243,20 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
     return this.activeInkView()?.kind ?? null;
   }
 
+  /**
+   * The Editing Toolbar plugin's bar above this note, when the ink tools are to sit in it (a setting): its
+   * top bar (the one that's always there), while it shows. PDFs, images, its other styles, or the plugin
+   * off: the ink tools keep their own bar.
+   */
+  private editingToolbarFor(view: FileView): HTMLElement | null {
+    if (!this.settings.inEditingToolbar || !(view instanceof MarkdownView)) return null;
+    const plugins = (this.app as unknown as { plugins?: { enabledPlugins?: Set<string> } }).plugins;
+    if (!plugins?.enabledPlugins?.has("editing-toolbar")) return null;
+    const bar = view.containerEl.querySelector<HTMLElement>('.editingToolbarModalBar[data-toolbar-style="top"]');
+    if (!bar || bar.hasClass("editing-toolbar-force-hidden") || bar.getClientRects().length === 0) return null;
+    return bar;
+  }
+
   private mountToolbar(view: FileView | null) {
     const el = this.toolbar.el;
     const kind = view ? inkKindOf(view) : null;
@@ -1246,7 +1266,15 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
       // Some tools are for notes only (see sendTool).
       this.sendTool();
     }
-    if (view && this.settings.showToolbar) {
+    const host = view && this.settings.showToolbar ? this.editingToolbarFor(view) : null;
+    if (el.parentElement !== host) el.parentElement?.removeClass("oni-et-host");
+    el.toggleClass("oni-in-et", !!host);
+    if (host) {
+      // One bar: the ink tools lead the Editing Toolbar plugin's own (it rebuilds its bar now and then;
+      // they move into the new one).
+      if (host.firstElementChild !== el) host.prepend(el);
+      host.addClass("oni-et-host");
+    } else if (view && this.settings.showToolbar) {
       if (el.parentElement !== view.containerEl || el.nextElementSibling !== view.contentEl) {
         view.containerEl.insertBefore(el, view.contentEl);
       }
@@ -1282,6 +1310,7 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
       ? view.contentEl.querySelector(".markdown-preview-sizer")
       : view.contentEl.querySelector(".cm-sizer");
     if (view && sizer instanceof HTMLElement) this.rulePage(view, sizer, ignored.lines);
+    if (view && sizer instanceof HTMLElement) this.keepPageWidth(view, sizer, inkOn && base ? this.inkPathFor(base, view.file!.path) : null);
     // No ink here: no room kept below the text for it either.
     if ((ignored.ink || rawSource) && sizer instanceof HTMLElement) sizer.removeClass("oni-grow");
 
@@ -1503,6 +1532,64 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
    * page below the lowest stroke, so writing near the bottom always leaves room to scroll on.
    * The space is a ::after spacer on the sizer (see styles.css), so Obsidian's own DOM is untouched.
    */
+  /**
+   * A note keeps the page it has across the whole editor area: in a split pane (or with a sidebar open) the
+   * text column keeps its width and its place, and the note scrolls sideways to the rest, out to the ink
+   * (never past the screen). Ink is placed from the text column, so a narrower column re-wrapped the text
+   * under it and the ink drifted off the words; ink in the margins went past the pane's edge.
+   */
+  private keepPageWidth(view: MarkdownView, sizer: HTMLElement, inkPath: string | null) {
+    const scroller = sizer.closest<HTMLElement>(".cm-scroller, .markdown-preview-view");
+    const root = (this.app.workspace as unknown as { rootSplit?: { containerEl: HTMLElement } }).rootSplit?.containerEl;
+    const off = !this.settings.keepPageWidth || !scroller || !root || !inkPath || view.containerEl.win !== window;
+    if (off) {
+      if (sizer.hasClass("oni-page")) this.unkeepPageWidth(sizer);
+      return;
+    }
+    const cs = getComputedStyle(scroller);
+    const pad = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
+    const scrollbar = scroller.offsetWidth - scroller.clientWidth;
+    // The note's width across the whole editor area (what it has unsplit), and the column in it.
+    const inner = Math.max(200, Math.round(root.getBoundingClientRect().width - scrollbar - pad));
+    const readable = !!sizer.closest(".is-readable-line-width");
+    const lineWidth = parseFloat(getComputedStyle(sizer).getPropertyValue("--file-line-width")) || 700;
+    const column = Math.round(readable ? Math.min(inner, lineWidth) : inner);
+    const margin = Math.floor((inner - column) / 2);
+    // Out to the ink on either side (column px), never wider than the screen.
+    const ink = this.inkSides.get(inkPath);
+    const most = Math.max(inner, Math.round((window.screen?.availWidth || inner) - scrollbar - pad));
+    const left = Math.max(0, Math.min(Math.max(margin, ink && ink.left < 0 ? Math.ceil(-ink.left) + 24 : 0), most - column));
+    const reach = Math.max(column + margin, Math.min(most - left, ink ? Math.ceil(ink.right) + 24 : 0));
+    const key = `${column}|${left}|${margin}|${reach}`;
+    if (sizer.dataset.oniPage === key) return;
+    const first = !sizer.hasClass("oni-page");
+    sizer.dataset.oniPage = key;
+    sizer.addClass("oni-page");
+    scroller.addClass("oni-page-scroller");
+    sizer.style.setProperty("width", `${column}px`);
+    sizer.style.setProperty("min-width", `${column}px`);
+    sizer.style.setProperty("max-width", `${column}px`);
+    sizer.style.setProperty("margin-left", `${left}px`);
+    sizer.style.setProperty("margin-right", `${margin}px`);
+    // Scrolls out as far as the ink goes (a margin alone doesn't widen what a page scrolls over).
+    sizer.style.setProperty("--oni-page-reach", `${reach}px`);
+    // A narrow pane opens on the text, not on the empty margin left of it.
+    if (first && scroller.clientWidth < left + column + margin) {
+      scroller.scrollLeft = Math.max(0, left - Math.max(0, (scroller.clientWidth - pad - column) / 2));
+    }
+  }
+
+  unkeepPageWidths() {
+    document.querySelectorAll<HTMLElement>(".oni-page").forEach((s) => this.unkeepPageWidth(s));
+  }
+
+  private unkeepPageWidth(sizer: HTMLElement) {
+    sizer.removeClass("oni-page");
+    delete sizer.dataset.oniPage;
+    for (const p of ["width", "min-width", "max-width", "margin-left", "margin-right", "--oni-page-reach"]) sizer.style.removeProperty(p);
+    sizer.closest(".oni-page-scroller")?.removeClass("oni-page-scroller");
+  }
+
   private growPage(sizer: HTMLElement, pageHeight: number, areaHeight: number, inkPath: string) {
     sizer.addClass("oni-grow");
     const current = parseFloat(sizer.style.getPropertyValue("--oni-ink-space")) || 0;
@@ -1700,6 +1787,11 @@ class InkSettingTab extends PluginSettingTab {
       });
 
     new Setting(containerEl)
+      .setName("Keep the page width in split panes")
+      .setDesc("A note keeps the page it has across the whole window: in a split pane the text doesn't re-wrap under your ink, and you scroll sideways to the rest of the page (out to your ink, never past the screen).")
+      .addToggle((t) => t.setValue(s.keepPageWidth).onChange((v) => { s.keepPageWidth = v; if (!v) this.plugin.unkeepPageWidths(); this.plugin.save(false); }));
+
+    new Setting(containerEl)
       .setName("Hide ink in Source mode")
       .setDesc("In Source mode (the raw Markdown) the ink isn't shown and the pen doesn't write; it's back in Live Preview and Reading view.")
       .addToggle((t) => t.setValue(s.hideInkInSource).onChange((v) => { s.hideInkInSource = v; this.plugin.save(false); }));
@@ -1830,6 +1922,11 @@ class InkSettingTab extends PluginSettingTab {
       .setName("Show ink toolbar")
       .setDesc("Pens, highlighter, erasers, lasso, undo and redo above each note.")
       .addToggle((t) => t.setValue(s.showToolbar).onChange((v) => { s.showToolbar = v; this.plugin.save(); }));
+
+    new Setting(containerEl)
+      .setName("Put the ink tools in Editing Toolbar")
+      .setDesc("One bar instead of two: the ink tools sit at the start of the Editing Toolbar plugin's top bar. Needs that plugin with its top toolbar on; on PDFs and images, and anywhere its bar isn't showing, the ink tools keep their own bar.")
+      .addToggle((t) => t.setValue(s.inEditingToolbar).onChange((v) => { s.inEditingToolbar = v; this.plugin.save(); }));
 
     new Setting(containerEl)
       .setName("Reset pens")
