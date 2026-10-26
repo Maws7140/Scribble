@@ -54,6 +54,8 @@ export interface InkSettings {
   showToolbar: boolean;
   /** "Draw with touch": a finger inks too (the ink layer then takes all touch over the page). */
   touchInk: boolean;
+  /** Source mode (raw Markdown, not Live Preview) shows no ink and takes no writing. */
+  hideInkInSource: boolean;
   recent: string[];
   /** Eraser the eraser button picks up when tapped from another tool. */
   lastEraser: "eraser-stroke" | "eraser-point";
@@ -134,6 +136,7 @@ export const DEFAULT_SETTINGS: InkSettings = {
   eraserSize: 3,
   showToolbar: true,
   touchInk: false,
+  hideInkInSource: true,
   recent: [],
   lastEraser: "eraser-stroke",
   ruled: false,

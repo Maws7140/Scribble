@@ -1260,7 +1260,7 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
     const target = this.activeInkView();
     // Notes (folders, tags, a property) set to go without some of this: see ignoreFor.
     const ignored = this.shownIgnored(target?.view ?? null);
-    const inkOn = this.enabled && !ignored.ink;
+    let inkOn = this.enabled && !ignored.ink;
     this.mountToolbar(ignored.toolbar ? null : target?.view ?? null);
 
     // A dialog covers the whole note: the ink steps aside. Menus, popovers and floating toolbars only
@@ -1272,13 +1272,18 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
       return;
     }
     const view = target?.view instanceof MarkdownView ? target.view : null;
+    // Source mode (the raw Markdown, not Live Preview) shows no ink: handwriting sits over formatted text,
+    // and lines laid out as raw source would only scatter it. Writing waits for Live Preview or Reading view.
+    const rawSource = !!view && this.settings.hideInkInSource && view.getMode() === "source"
+      && !view.contentEl.querySelector(".markdown-source-view")?.classList.contains("is-live-preview");
+    if (rawSource) inkOn = false;
 
     const sizer = !view ? null : view.getMode() === "preview"
       ? view.contentEl.querySelector(".markdown-preview-sizer")
       : view.contentEl.querySelector(".cm-sizer");
     if (view && sizer instanceof HTMLElement) this.rulePage(view, sizer, ignored.lines);
     // No ink here: no room kept below the text for it either.
-    if (ignored.ink && sizer instanceof HTMLElement) sizer.removeClass("oni-grow");
+    if ((ignored.ink || rawSource) && sizer instanceof HTMLElement) sizer.removeClass("oni-grow");
 
     const inkPath = view && base ? this.inkPathFor(base, view.file!.path) : null;
     let msg: object = { type: "layout", visible: false };
@@ -1693,6 +1698,11 @@ class InkSettingTab extends PluginSettingTab {
         for (const l of PAGE_LINES) d.addOption(l.id, l.label);
         d.setValue(s.pageLines).onChange((v) => { s.pageLines = v; this.plugin.save(); });
       });
+
+    new Setting(containerEl)
+      .setName("Hide ink in Source mode")
+      .setDesc("In Source mode (the raw Markdown) the ink isn't shown and the pen doesn't write; it's back in Live Preview and Reading view.")
+      .addToggle((t) => t.setValue(s.hideInkInSource).onChange((v) => { s.hideInkInSource = v; this.plugin.save(false); }));
 
     new Setting(containerEl).setName("Where ink tools appear").setHeading();
 
