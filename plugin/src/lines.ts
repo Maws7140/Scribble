@@ -201,6 +201,72 @@ export function clearBlankSpace(view: MarkdownView) {
   if (r) reserveBlankSpace(view, r, 0, 0, false);
 }
 
+/**
+ * Where each source line of one rendered block starts, as Live Preview has them, so ink by any of its lines
+ * sits in the same place in both views: a paragraph's lines at its line breaks, a list's at its items, a
+ * code block's line by line. What Live Preview draws as one piece (maths, tables, callouts, embeds, other
+ * plugins' blocks) has all its lines at its top there, so here too. (Spreading every block's lines evenly
+ * over it put a line under a tall image halfway down the image, and the ink written by it with it.)
+ * Off screen (not `measured`) the block isn't laid out: an even spread is the estimate.
+ */
+function blockLineTops(s: PreviewSection, top: number, bottom: number, sizerTop: number, lineHeight: number, measured: boolean): number[] {
+  const n = s.end.line - s.start.line + 1;
+  const spread = Array.from({ length: n }, (_, k) => top + (k / n) * Math.max(0, bottom - top));
+  if (n === 1) return [top];
+  const first = s.el.firstElementChild;
+  const tag = first?.tagName;
+  if (!first || !(tag === "P" || tag === "BLOCKQUOTE" || tag === "UL" || tag === "OL" || tag === "PRE")) return spread.map(() => top);
+  if (tag === "PRE") return first.querySelector(":scope > code") ? spread : spread.map(() => top);
+  if (!measured) return spread;
+
+  const tops = spread.slice();
+  if (tag === "UL" || tag === "OL") {
+    // Each item says which line it starts on (data-line: from the block's first line, or from the note's).
+    const items = Array.from(first.querySelectorAll<HTMLElement>("li[data-line]"));
+    const lines = items.map((li) => Number(li.dataset.line));
+    const shift = lines.some((v) => v >= n) ? s.start.line : 0;
+    const at = new Map<number, number>();
+    items.forEach((li, i) => {
+      const k = lines[i] - shift;
+      if (Number.isInteger(k) && k >= 0 && k < n && !at.has(k)) at.set(k, li.getBoundingClientRect().top - sizerTop);
+    });
+    if (at.size === 0) return spread;
+    let last = top;
+    for (let k = 0; k < n; k++) {
+      last = at.get(k) ?? last; // a line that continues an item stays with it
+      tops[k] = last;
+    }
+    return tops;
+  }
+  // A paragraph (or quote): one <br> per line break, as long as the note doesn't use strict line breaks.
+  const breaks = Array.from(first.querySelectorAll("br"));
+  if (breaks.length !== n - 1) return spread;
+  breaks.forEach((br, i) => {
+    const t = topAfter(br, lineHeight);
+    if (t !== null) tops[i + 1] = t - sizerTop;
+  });
+  return tops;
+}
+
+/** Viewport top of the line that starts after a line break: its first text (line box) or element. */
+function topAfter(br: Element, lineHeight: number): number | null {
+  for (let node = br.nextSibling; node; node = node.nextSibling) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      if (!node.textContent?.trim()) continue;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      const rect = range.getClientRects()[0];
+      // The text's own box is the font's height; the line it's on starts half the leading above.
+      if (rect) return rect.top - Math.max(0, (lineHeight - rect.height) / 2);
+    } else if (node instanceof HTMLElement) {
+      if (node.tagName === "BR") return null;
+      const rect = node.getBoundingClientRect();
+      if (rect.height > 0) return rect.top;
+    }
+  }
+  return null;
+}
+
 /** Reading view: on-screen sections are measured; off-screen ones use the renderer's own estimate. */
 function previewTops(view: MarkdownView, sizer: HTMLElement, sizerTop: number, hasInk: boolean): LineLayout | null {
   const r = rendererOf(view);
@@ -251,11 +317,9 @@ function previewTops(view: MarkdownView, sizer: HTMLElement, sizerTop: number, h
     }
     // Blank lines before this block, one line height apart, ending one line above it: as in Live Preview.
     for (let l = prevEnd + 1; l < s.start.line && l < count; l++) tops[l] = contentTop - (s.start.line - l) * lineHeight;
-    // A section is one block (a paragraph, list, tableâ€¦) over several source lines; spread them across it.
-    const n = s.end.line - s.start.line + 1;
-    for (let l = s.start.line; l <= s.end.line && l < count; l++) {
-      tops[l] = contentTop + ((l - s.start.line) / n) * Math.max(0, contentBottom - contentTop);
-    }
+    // A section is one block (a paragraph, list, table...) over one or more source lines.
+    const inBlock = blockLineTops(s, contentTop, contentBottom, sizerTop, lineHeight, measurable(s.el));
+    for (let l = s.start.line; l <= s.end.line && l < count; l++) tops[l] = inBlock[l - s.start.line];
     prevEnd = s.end.line;
     prevBottom = contentBottom;
   }
