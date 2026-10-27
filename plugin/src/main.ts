@@ -1355,7 +1355,9 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
     const target = this.activeInkView();
     // Notes (folders, tags, a property) set to go without some of this: see ignoreFor.
     const ignored = this.shownIgnored(target?.view ?? null);
-    let inkOn = this.enabled && !ignored.ink;
+    // A note whose text hasn't arrived in its view yet (see showsItsFile) shows no ink: it would be over
+    // the text of the note the view had before.
+    let inkOn = this.enabled && !ignored.ink && (!target || this.showsItsFile(target.view));
     this.mountToolbar(ignored.toolbar ? null : target?.view ?? null);
     const note = target?.view instanceof MarkdownView ? target.view : null;
     this.merged.watch((note?.editor as unknown as { cm?: EditorView } | undefined)?.cm ?? null, note?.file?.path ?? "");
@@ -1427,27 +1429,58 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
   /** The note whose rules are on screen, and those rules (see shownIgnored). */
   private shownFile = "";
   private shownRules: Ignored = NOT_IGNORED;
-  private switchingTo = "";
-  private switchingSince = 0;
 
   /**
    * The rules for what's on screen. Opening a note, Obsidian names the new file a moment before it shows
    * its text, so for that moment the old note got the new one's lines and toolbar (a note without lines
-   * flashed them). A note's rules apply once its text is showing; until then, the last note's stay.
+   * flashed them). A note's rules apply once its text is showing (see showsItsFile); until then, the last
+   * note's stay.
    */
   private shownIgnored(view: FileView | null): Ignored {
     const file = view?.file ?? null;
     if (!file) return NOT_IGNORED;
     if (file.path !== this.shownFile) {
-      if (this.switchingTo !== file.path) { this.switchingTo = file.path; this.switchingSince = performance.now(); }
-      // (After a second and a half they apply anyway: a note whose text never matches its file on disk.)
-      const waiting = view instanceof MarkdownView && performance.now() - this.switchingSince < 1500
-        && !this.showsFile(view, view.editor?.getValue() ?? "");
-      if (waiting) return this.shownRules;
+      if (view && !this.showsItsFile(view)) return this.shownRules;
       this.shownFile = file.path;
     }
     this.shownRules = this.ignoreFor(file);
     return this.shownRules;
+  }
+
+  /** The view and file whose text has shown up in it (see showsItsFile). */
+  private loadedView: FileView | null = null;
+  private loadedPath = "";
+  private confirmingAt = 0;
+
+  /**
+   * Has the view got its file's text yet? Opening a note, Obsidian names the new file first and reads it
+   * after, and that read can stall: after a reload, a tab opened onto another note kept the last note's
+   * text under the new note's name until it was selected again, and the new note's ink was drawn over the
+   * old note's text. Until its text is there, a note's ink and rules stay off. Once it has shown (or been
+   * typed in), it counts as showing for as long as that view has that file.
+   */
+  private showsItsFile(view: FileView): boolean {
+    const file = view.file;
+    if (!(view instanceof MarkdownView) || !file) return true;
+    if (view === this.loadedView && file.path === this.loadedPath) return true;
+    const text = view.editor?.getValue() ?? "";
+    if (this.showsFile(view, text)) {
+      this.loadedView = view;
+      this.loadedPath = file.path;
+      return true;
+    }
+    // The size check can miss a file whose line ends are mixed: compare the text itself (once a second).
+    if (performance.now() - this.confirmingAt > 1000) {
+      this.confirmingAt = performance.now();
+      void this.app.vault.cachedRead(file).then((disk) => {
+        const same = (a: string) => a.replace(/^﻿/, "").replace(/\r\n?/g, "\n");
+        if (view.file === file && same(disk) === same(view.editor?.getValue() ?? "")) {
+          this.loadedView = view;
+          this.loadedPath = file.path;
+        }
+      });
+    }
+    return false;
   }
 
   /** What this file goes without (rule lines, toolbar, ink layer), from the ignore settings. Cached per file. */
