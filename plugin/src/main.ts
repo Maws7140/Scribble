@@ -1249,12 +1249,44 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
    * off: the ink tools keep their own bar.
    */
   private editingToolbarFor(view: FileView): HTMLElement | null {
-    if (!this.settings.inEditingToolbar || !(view instanceof MarkdownView)) return null;
-    const plugins = (this.app as unknown as { plugins?: { enabledPlugins?: Set<string> } }).plugins;
-    if (!plugins?.enabledPlugins?.has("editing-toolbar")) return null;
+    if (!this.settings.inEditingToolbar || !(view instanceof MarkdownView) || !this.editingToolbarPlugin()) return null;
     const bar = view.containerEl.querySelector<HTMLElement>('.editingToolbarModalBar[data-toolbar-style="top"]');
     if (!bar || bar.hasClass("editing-toolbar-force-hidden") || bar.getClientRects().length === 0) return null;
     return bar;
+  }
+
+  /** The Editing Toolbar plugin, when it's on and lays its top bar out the way reserveInEditingToolbar expects. */
+  private editingToolbarPlugin(): EditingToolbarPlugin | null {
+    const plugins = (this.app as unknown as { plugins?: { enabledPlugins?: Set<string>; plugins?: Record<string, unknown> } }).plugins;
+    if (!plugins?.enabledPlugins?.has("editing-toolbar")) return null;
+    const et = plugins.plugins?.["editing-toolbar"] as EditingToolbarPlugin | undefined;
+    return et && typeof et.handleeditingToolbar_resize === "function" ? et : null;
+  }
+
+  /**
+   * Editing Toolbar fits its buttons to the width by counting them (anything beyond goes in its ⋯ menu), so
+   * the ink tools in its bar would push it onto two rows. Hidden stand-in buttons, as many as the ink tools
+   * are wide, make it count them too; then it's asked to lay its bar out again (as after a resize).
+   */
+  private reserveInEditingToolbar(bar: HTMLElement | null, el: HTMLElement) {
+    const slots = bar ? Array.from(bar.querySelectorAll(":scope > button.oni-et-slot")) : [];
+    let need = 0;
+    if (bar && el.parentElement === bar) {
+      bar.dataset.oniIcon ??= getComputedStyle(bar).getPropertyValue("--toolbar-icon-size");
+      const icon = parseFloat(bar.dataset.oniIcon) || 18;
+      // What it budgets per button (its icon, padding and margins).
+      need = Math.ceil((el.getBoundingClientRect().width + 8) / (icon + 14));
+    }
+    if (slots.length === need) return;
+    slots.forEach((s) => s.remove());
+    for (let i = 0; i < need; i++) {
+      el.insertAdjacentElement("afterend", createEl("button", { cls: "editingToolbarCommandItem oni-et-slot", attr: { "aria-hidden": "true", tabindex: "-1" } }));
+    }
+    const et = this.editingToolbarPlugin();
+    if (et) {
+      et.Leaf_Width = 0;
+      et.handleeditingToolbar_resize();
+    }
   }
 
   private mountToolbar(view: FileView | null) {
@@ -1267,13 +1299,19 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
       this.sendTool();
     }
     const host = view && this.settings.showToolbar ? this.editingToolbarFor(view) : null;
-    if (el.parentElement !== host) el.parentElement?.removeClass("oni-et-host");
+    const was = el.parentElement;
+    if (was !== host && was?.hasClass("oni-et-host")) {
+      was.removeClass("oni-et-host");
+      el.detach();
+      this.reserveInEditingToolbar(was, el);
+    }
     el.toggleClass("oni-in-et", !!host);
     if (host) {
       // One bar: the ink tools lead the Editing Toolbar plugin's own (it rebuilds its bar now and then;
       // they move into the new one).
       if (host.firstElementChild !== el) host.prepend(el);
       host.addClass("oni-et-host");
+      this.reserveInEditingToolbar(host, el);
     } else if (view && this.settings.showToolbar) {
       if (el.parentElement !== view.containerEl || el.nextElementSibling !== view.contentEl) {
         view.containerEl.insertBefore(el, view.contentEl);
@@ -1683,7 +1721,13 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
 }
 
 /** Obsidian UI that appears over a note: menus, suggestions, hover previews, tooltips, notices, our popover. */
-const OVER_NOTE = ".menu, .suggestion-container, .popover, .oni-popover, .tooltip, .notice-container, .prompt";
+/** What reserveInEditingToolbar uses of the Editing Toolbar plugin: its re-layout after a resize. */
+interface EditingToolbarPlugin {
+  Leaf_Width: number;
+  handleeditingToolbar_resize(): unknown;
+}
+
+const OVER_NOTE =".menu, .suggestion-container, .popover, .oni-popover, .tooltip, .notice-container, .prompt";
 /** Other plugins' floating bars inside a note (editing toolbar, floating table of contents, search...). */
 const FLOATING = "#editingToolbarModalBar, #editingToolbarPopoverBar, .editing-toolbar-ai-inline-prompt, .floating-toc-div, .document-search-container, .cm-panels, [class*='toolbar' i], [class*='floating' i]";
 

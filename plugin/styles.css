@@ -56,25 +56,50 @@
   flex-shrink: 0;
 }
 
-/* In the Editing Toolbar plugin's top bar (a setting): one group at its start, in its look. Its bar wraps
-   to a second row in a narrow pane rather than run under the edge (it sizes its own buttons only). */
-.oni-et-host#editingToolbarModalBar.top {
-  flex-wrap: wrap;
-  height: auto;
-  min-height: calc(var(--toolbar-icon-size, 18px) + 18px);
+/* In the Editing Toolbar plugin's top bar (a setting): one group at its start, with its button look. Its
+   own buttons make room (see reserveInEditingToolbar), via the hidden stand-ins. */
+.oni-et-slot {
+  display: none !important;
 }
 .oni-toolbar.oni-in-et {
-  height: calc(var(--toolbar-icon-size, 18px) + 18px);
-  padding: 0 var(--size-4-1) 0 0;
-  margin-right: var(--size-4-1);
-  border-bottom: none;
-  border-right: var(--border-width) solid var(--divider-color);
-  background-color: transparent;
+  align-self: stretch;
+  height: auto;
+  gap: 0;
+  padding: 0;
+  margin: 0;
+  border: none;
+  background: none;
   overflow: visible;
 }
 .oni-toolbar.oni-in-et .oni-right {
+  gap: 0;
   margin-left: 0;
-  padding-left: var(--size-2-1);
+  padding-left: 0;
+}
+.oni-toolbar.oni-in-et .oni-btn {
+  margin: 2px 3px;
+  padding: 5px 6px;
+  border-radius: var(--radius-s);
+}
+.oni-toolbar.oni-in-et .oni-btn svg {
+  width: var(--toolbar-icon-size, 18px);
+  height: var(--toolbar-icon-size, 18px);
+}
+.oni-toolbar.oni-in-et .oni-pen,
+.oni-toolbar.oni-in-et .oni-restyle {
+  padding-bottom: 7px;
+}
+.oni-toolbar.oni-in-et .oni-color-bar {
+  bottom: 2px;
+}
+/* Between the ink tools and Editing Toolbar's own, like its dividers. */
+.oni-toolbar.oni-in-et::after {
+  content: "";
+  flex-shrink: 0;
+  width: 1px;
+  height: calc(var(--toolbar-icon-size, 18px) + 4px);
+  margin: 0 4px;
+  background-color: var(--divider-color);
 }
 
 .oni-toolbar.is-off .oni-pen,
