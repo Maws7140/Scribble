@@ -101,6 +101,7 @@ export class Toolbar {
         });
       btn.addClass("oni-pen");
       btn.toggleClass("is-active", active);
+      btn.addEventListener("contextmenu", (e) => this.penMenu(e, btn, i));
       this.colorBar(btn, slot);
     });
     if (s.slots.length < MAX_SLOTS) {
@@ -112,17 +113,17 @@ export class Toolbar {
         this.host.save();
         const pens = this.el.querySelectorAll<HTMLElement>(".oni-pen");
         this.openPenPopover(pens[pens.length - 1], s.active);
-      }).addClass("oni-add");
+      }, this.el, "add-pen").addClass("oni-add");
     }
     if (this.host.inkKind() === "markdown") {
       this.button("type", "Ink to Text pen: writing becomes typed text when you pause", () => {
         s.tool = "text-pen";
         this.host.save();
-      }).toggleClass("is-active", s.tool === "text-pen");
+      }, this.el, "text-pen").toggleClass("is-active", s.tool === "text-pen");
       this.button("text-cursor-input", "Ink Editor pen: strike through or scratch out words to delete them, circle to select, draw ^ to insert", () => {
         s.tool = "editor-pen";
         this.host.save();
-      }).toggleClass("is-active", s.tool === "editor-pen");
+      }, this.el, "editor-pen").toggleClass("is-active", s.tool === "editor-pen");
     }
 
     this.divider();
@@ -136,18 +137,18 @@ export class Toolbar {
       } else {
         this.openEraserMenu(eraser);
       }
-    });
+    }, this.el, "eraser");
     eraser.toggleClass("is-active", erasing);
 
     const lasso = this.button("lasso", "Lasso select (or hold the pen's side button with any tool)", () => {
       s.tool = "lasso";
       this.host.save();
-    });
+    }, this.el, "lasso");
     lasso.toggleClass("is-active", s.tool === "lasso");
     this.button("mouse-pointer-2", "Pointer: the pen works the note like a mouse (links, buttons, selecting text)", () => {
       s.tool = "pointer";
       this.host.save();
-    }).toggleClass("is-active", s.tool === "pointer");
+    }, this.el, "pointer").toggleClass("is-active", s.tool === "pointer");
     // Selected ink (lassoed with the side button too) gets its actions whatever the tool.
     if (s.tool === "lasso" || this.host.selectionCount() > 0) this.selectionActions();
 
@@ -157,9 +158,9 @@ export class Toolbar {
 
     // In Editing Toolbar's bar its own undo and redo do both ink and text, so these hide (see styles.css).
     this.el.lastElementChild?.addClass("oni-history");
-    const undo = this.button("undo-2", "Undo", () => this.host.command("undo"));
+    const undo = this.button("undo-2", "Undo", () => this.host.command("undo"), this.el, "undo");
     undo.addClasses(["oni-history", ...(this.canUndo ? [] : ["is-disabled"])]);
-    const redo = this.button("redo-2", "Redo", () => this.host.command("redo"));
+    const redo = this.button("redo-2", "Redo", () => this.host.command("redo"), this.el, "undo");
     redo.addClasses(["oni-history", ...(this.canRedo ? [] : ["is-disabled"])]);
 
     // Page and layer toggles sit on the right.
@@ -171,7 +172,7 @@ export class Toolbar {
         menu.addItem((i) => i.setTitle("Pull changes from OneNote").setIcon("download").onClick(() => this.host.pullFromOneNote()));
         const r = oneNote.getBoundingClientRect();
         menu.showAtPosition({ x: r.left, y: r.bottom + 4 });
-      }, right);
+      }, right, "onenote");
       const lines = this.button("align-justify", "Rule and grid lines", () => {
         const menu = new Menu();
         menu.addItem((i) => i.setTitle("No lines").setChecked(s.pageLines === "none").onClick(() => { s.pageLines = "none"; this.host.save(); }));
@@ -182,17 +183,18 @@ export class Toolbar {
         }
         const r = lines.getBoundingClientRect();
         menu.showAtPosition({ x: r.left, y: r.bottom + 4 });
-      }, right);
+      }, right, "lines");
       lines.toggleClass("is-active", s.pageLines !== "none");
     }
     this.button("hand", s.touchInk ? "Draw with touch is on: your finger inks (tap to turn off)" : "Draw with touch: let your finger ink too", () => {
       s.touchInk = !s.touchInk;
       this.host.save();
-    }, right).toggleClass("is-active", s.touchInk);
+    }, right, "touch").toggleClass("is-active", s.touchInk);
     this.button(this.host.layerOn() ? "eye" : "eye-off", this.host.layerOn() ? "Hide ink" : "Show ink", () => {
       this.host.toggleLayer();
       this.render();
-    }, right);
+    }, right, "layer");
+    this.tidyDividers();
   }
 
   /** OneNote's Draw-tab page tools: insert space, shapes, ruler, laser pointer, ink replay. */
@@ -200,7 +202,7 @@ export class Toolbar {
     const s = this.host.settings;
     const pick = (tool: InkSettings["tool"]) => { s.tool = tool; this.host.save(); };
     if (this.host.inkKind() === "markdown") {
-      this.button("move-vertical", "Insert space: drag down to add space (and lines) to the note, up to remove it", () => pick("space"))
+      this.button("move-vertical", "Insert space: drag down to add space (and lines) to the note, up to remove it", () => pick("space"), this.el, "space")
         .toggleClass("is-active", s.tool === "space");
     }
     const shapeOn = s.tool.startsWith("shape:");
@@ -214,25 +216,76 @@ export class Toolbar {
       }
       const r = shapes.getBoundingClientRect();
       menu.showAtPosition({ x: r.left, y: r.bottom + 4 });
-    });
+    }, this.el, "shapes");
     shapes.toggleClass("is-active", shapeOn);
     this.button("ruler", s.ruler ? "Put the ruler away" : "Ruler: draw along its edge for a straight line; drag its middle to move it, its ends to turn it", () => {
       s.ruler = !s.ruler;
       this.host.save();
       this.host.command("ruler", { visible: s.ruler });
-    }).toggleClass("is-active", s.ruler);
-    this.button("pointer", "Laser pointer (fades, isn't saved)", () => pick("laser")).toggleClass("is-active", s.tool === "laser");
+    }, this.el, "ruler").toggleClass("is-active", s.ruler);
+    this.button("pointer", "Laser pointer (fades, isn't saved)", () => pick("laser"), this.el, "laser").toggleClass("is-active", s.tool === "laser");
     this.button(this.replaying ? "square" : "play", this.replaying ? "Stop replay" : "Ink replay: watch the page being written", () =>
-      this.host.command(this.replaying ? "replay-stop" : "replay")).toggleClass("is-active", this.replaying);
+      this.host.command(this.replaying ? "replay-stop" : "replay"), this.el, "replay").toggleClass("is-active", this.replaying);
   }
 
-  private button(icon: string, label: string, onClick: () => void, parent: HTMLElement = this.el): HTMLElement {
-    const b = parent.createDiv({ cls: "clickable-icon oni-btn", attr: { "aria-label": label, role: "button", tabindex: "0" } });
+  /**
+   * A toolbar button. With an `id` (see TOOLBAR_BUTTONS) it can be taken off the toolbar: right-click it,
+   * or in settings. A hidden one is still made, just not put on the toolbar.
+   */
+  private button(icon: string, label: string, onClick: () => void, parent: HTMLElement = this.el, id?: string): HTMLElement {
+    const hidden = !!id && this.host.settings.hiddenTools.includes(id);
+    const attr = { "aria-label": label, role: "button", tabindex: "0" };
+    const b = hidden ? createDiv({ cls: "clickable-icon oni-btn", attr }) : parent.createDiv({ cls: "clickable-icon oni-btn", attr });
     setIcon(b, icon);
     b.addEventListener("click", () => {
       if (!b.hasClass("is-disabled")) onClick();
     });
+    if (id) {
+      b.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        const menu = new Menu();
+        menu.addItem((i) => i.setTitle("Hide from toolbar").setIcon("eye-off").onClick(() => this.hide(id)));
+        menu.addItem((i) => i.setTitle("Bring buttons back in settings").setIcon("settings").setDisabled(true));
+        menu.showAtMouseEvent(e);
+      });
+    }
     return b;
+  }
+
+  private hide(id: string) {
+    const s = this.host.settings;
+    if (!s.hiddenTools.includes(id)) s.hiddenTools = [...s.hiddenTools, id];
+    this.host.save();
+  }
+
+  /** Right-click a pen: edit it, or take it off the toolbar (the last pen stays). */
+  private penMenu(e: MouseEvent, btn: HTMLElement, index: number) {
+    e.preventDefault();
+    const s = this.host.settings;
+    const menu = new Menu();
+    menu.addItem((i) => i.setTitle("Edit pen").setIcon("pencil").onClick(() => this.openPenPopover(btn, index)));
+    if (s.slots.length > 1) {
+      menu.addItem((i) => i.setTitle("Remove pen").setIcon("trash-2").onClick(() => {
+        s.slots.splice(index, 1);
+        if (s.active >= index && s.active > 0) s.active--;
+        this.host.save();
+      }));
+    }
+    menu.showAtMouseEvent(e);
+  }
+
+  /** With buttons hidden, a group can empty out: no divider at either end or two in a row. */
+  private tidyDividers() {
+    let previous: Element | null = null;
+    for (const child of Array.from(this.el.children)) {
+      if (child.hasClass("oni-right")) break;
+      const divider = child.hasClass("oni-divider");
+      if (divider && (!previous || previous.hasClass("oni-divider"))) child.remove();
+      else previous = child;
+    }
+    const right = this.el.querySelector(":scope > .oni-right");
+    const last = right ? right.previousElementSibling : this.el.lastElementChild;
+    if (last?.hasClass("oni-divider")) last.remove();
   }
 
   /**

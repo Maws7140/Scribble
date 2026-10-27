@@ -60,6 +60,8 @@ export interface InkSettings {
   keepPageWidth: boolean;
   /** The ink tools sit in the Editing Toolbar plugin's top bar instead of a bar of their own. */
   inEditingToolbar: boolean;
+  /** Toolbar buttons taken off the toolbar (ids from TOOLBAR_BUTTONS). */
+  hiddenTools: string[];
   recent: string[];
   /** Eraser the eraser button picks up when tapped from another tool. */
   lastEraser: "eraser-stroke" | "eraser-point";
@@ -143,6 +145,7 @@ export const DEFAULT_SETTINGS: InkSettings = {
   hideInkInSource: true,
   keepPageWidth: true,
   inEditingToolbar: false,
+  hiddenTools: [],
   recent: [],
   lastEraser: "eraser-stroke",
   ruled: false,
@@ -239,3 +242,23 @@ export function shownColor(hex: string): string {
   if (Math.max(r, g, b) - Math.min(r, g, b) > 12 || Math.max(r, g, b) >= 96) return hex;
   return "#" + [r, g, b].map((v) => (255 - v).toString(16).padStart(2, "0")).join("").toUpperCase();
 }
+
+/** The toolbar's buttons that can be taken off it (right-click one, or in settings). Pens are removed instead. */
+export const TOOLBAR_BUTTONS: { id: string; label: string; notesOnly?: boolean }[] = [
+  { id: "add-pen", label: "Add pen (+)" },
+  { id: "text-pen", label: "Ink to Text pen", notesOnly: true },
+  { id: "editor-pen", label: "Ink Editor pen", notesOnly: true },
+  { id: "eraser", label: "Eraser" },
+  { id: "lasso", label: "Lasso select" },
+  { id: "pointer", label: "Pointer" },
+  { id: "space", label: "Insert space", notesOnly: true },
+  { id: "shapes", label: "Shapes" },
+  { id: "ruler", label: "Ruler" },
+  { id: "laser", label: "Laser pointer" },
+  { id: "replay", label: "Ink replay" },
+  { id: "undo", label: "Undo and redo" },
+  { id: "onenote", label: "OneNote menu", notesOnly: true },
+  { id: "lines", label: "Rule and grid lines", notesOnly: true },
+  { id: "touch", label: "Draw with touch" },
+  { id: "layer", label: "Show or hide ink" },
+];

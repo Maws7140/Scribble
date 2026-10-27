@@ -551,3 +551,17 @@
   pointer-events: none;
   z-index: 5;
 }
+
+/* Settings: the toolbar buttons and pens listed under their heading. */
+.oni-setting-indent {
+  padding-left: var(--size-4-6);
+}
+.oni-pen-swatch {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  margin-right: var(--size-4-2);
+  border-radius: 50%;
+  border: 1px solid var(--background-modifier-border);
+  vertical-align: middle;
+}

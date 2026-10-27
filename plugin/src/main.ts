@@ -1,7 +1,7 @@
 import { App, FileSystemAdapter, FileView, MarkdownRenderChild, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile, debounce, getAllTags, loadMathJax } from "obsidian";
 import { spawn, ChildProcessWithoutNullStreams } from "child_process";
 import * as path from "path";
-import { DEFAULT_SETTINGS, DEFAULT_SLOTS, ERASER_SIZES, Ignored, InkSettings, NOT_IGNORED, PAGE_LINES, ignoredFor, isDarkTheme, mmToPx } from "./settings";
+import { DEFAULT_SETTINGS, DEFAULT_SLOTS, ERASER_SIZES, Ignored, InkSettings, NOT_IGNORED, PAGE_LINES, TOOLBAR_BUTTONS, ignoredFor, isDarkTheme, mmToPx, shownColor } from "./settings";
 import { Toolbar, ToolbarHost } from "./toolbar";
 import { clearBlankSpace, describeLayout, lineHashes, lineTops } from "./lines";
 import { OverwriteModal, PullModal, SyncState, TextChange, applyTextChanges, noteBlocks, textColumn, withoutEchoes } from "./onenote";
@@ -2019,6 +2019,38 @@ class InkSettingTab extends PluginSettingTab {
       .setName("Put the ink tools in Editing Toolbar")
       .setDesc("One bar instead of two: the ink tools sit at the start of the Editing Toolbar plugin's top bar. Needs that plugin with its top toolbar on; on PDFs and images, and anywhere its bar isn't showing, the ink tools keep their own bar.")
       .addToggle((t) => t.setValue(s.inEditingToolbar).onChange((v) => { s.inEditingToolbar = v; this.plugin.save(); }));
+
+    // What's on the toolbar: each button (right-clicking one on the toolbar hides it too), and the pens.
+    new Setting(containerEl).setName("Toolbar buttons")
+      .setDesc("Take buttons you don't use off the toolbar. You can also right-click a button on the toolbar to hide it.")
+      .addButton((b) => b.setButtonText("Show all").onClick(() => { s.hiddenTools = []; this.plugin.save(); this.display(); }));
+    for (const tool of TOOLBAR_BUTTONS) {
+      new Setting(containerEl)
+        .setName(tool.label)
+        .setDesc(tool.notesOnly ? "On notes (not PDFs or images)." : "")
+        .setClass("oni-setting-indent")
+        .addToggle((t) => t.setValue(!s.hiddenTools.includes(tool.id)).onChange((v) => {
+          s.hiddenTools = v ? s.hiddenTools.filter((id) => id !== tool.id) : [...s.hiddenTools, tool.id];
+          this.plugin.save();
+        }));
+    }
+    new Setting(containerEl).setName("Pens")
+      .setDesc("Remove pens you don't use (one always stays). Add pens with + on the toolbar; right-click a pen there to edit or remove it.");
+    s.slots.forEach((slot, i) => {
+      const kind = slot.kind === "pen" ? "Pen" : slot.kind === "pencil" ? "Pencil" : "Highlighter";
+      const row = new Setting(containerEl)
+        .setName(`${kind}, ${slot.size.toFixed(slot.size < 1 ? 2 : 1)} mm${slot.effect ? ` (${slot.effect})` : ""}`)
+        .setClass("oni-setting-indent");
+      row.nameEl.prepend(createSpan({ cls: "oni-pen-swatch", attr: { style: `background-color: ${shownColor(slot.color)}` } }));
+      if (s.slots.length > 1) {
+        row.addExtraButton((b) => b.setIcon("trash-2").setTooltip("Remove pen").onClick(() => {
+          s.slots.splice(i, 1);
+          if (s.active >= i && s.active > 0) s.active--;
+          this.plugin.save();
+          this.display();
+        }));
+      }
+    });
 
     new Setting(containerEl)
       .setName("Reset pens")
