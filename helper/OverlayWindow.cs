@@ -787,7 +787,7 @@ public sealed partial class OverlayWindow : Window
         history.Add(Pack(ink.Strokes));
         historyIndex = 0;
         snapshotDebounce.Stop();
-        SendHistory();
+        SendHistory(reset: true);
     }
 
     void Snapshot()
@@ -796,7 +796,7 @@ public sealed partial class OverlayWindow : Window
         history.Add(Pack(ink.Strokes));
         if (history.Count > MaxHistory) history.RemoveAt(0);
         historyIndex = history.Count - 1;
-        SendHistory();
+        SendHistory(added: true);
     }
 
     void Restore(int index)
@@ -835,8 +835,12 @@ public sealed partial class OverlayWindow : Window
         return strokes;
     }
 
-    void SendHistory() =>
-        Protocol.Send(new { type = "history", canUndo = historyIndex > 0, canRedo = historyIndex < history.Count - 1 });
+    /// <summary>
+    /// Undo/redo state for the toolbar. `added`: a new step (the plugin's one undo for ink and text keeps the
+    /// order of steps); `reset`: a new page's history; `steps`: where in it we are.
+    /// </summary>
+    void SendHistory(bool added = false, bool reset = false) =>
+        Protocol.Send(new { type = "history", canUndo = historyIndex > 0, canRedo = historyIndex < history.Count - 1, steps = historyIndex, added, reset });
 
     public void FlushSave()
     {

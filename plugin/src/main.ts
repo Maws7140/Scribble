@@ -14,6 +14,7 @@ import { EditorView, ViewUpdate } from "@codemirror/view";
 import { EditGesture, applyEditGesture } from "./editgesture";
 import { DomInk, DomUpdate } from "./domink";
 import { lineShifts } from "./lineshift";
+import { MergedHistory } from "./undo";
 
 /**
  * Drives a native Windows Ink overlay (helper/InkOverlay.exe) that sits over the active note.
@@ -48,6 +49,8 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
   private handwriting!: HandwritingIndex;
   /** The ink drawn in the note itself, so it scrolls with the text (see domink.ts). */
   private domInk = new DomInk();
+  /** One undo for ink and text, for Editing Toolbar's undo and redo when the ink tools are in its bar. */
+  private merged = new MergedHistory((command) => this.command(command));
 
   async onload() {
     await this.loadSettings();
@@ -486,7 +489,7 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
       return;
     }
     let msg: {
-      type?: string; canUndo?: boolean; canRedo?: boolean; scratchOut?: boolean; message?: string;
+      type?: string; canUndo?: boolean; canRedo?: boolean; steps?: number; added?: boolean; reset?: boolean; scratchOut?: boolean; message?: string;
       path?: string; bottom?: number; left?: number; right?: number; ok?: boolean; pageId?: string; noteKey?: string; error?: string;
       state?: SyncState; navigated?: boolean; navigate?: boolean; pageChanged?: boolean; textChanges?: number; inkChanged?: boolean;
       changes?: TextChange[]; strokes?: number; inkWords?: number; changed?: string[];
@@ -503,6 +506,7 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
     switch (msg.type) {
       case "history":
         this.toolbar.setHistory(!!msg.canUndo, !!msg.canRedo);
+        this.merged.onInk(msg.steps ?? 0, !!msg.added, !!msg.reset, !!msg.canUndo, !!msg.canRedo);
         break;
       case "capabilities":
         this.scratchOutAvailable = !!msg.scratchOut;
@@ -745,6 +749,7 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
    * a handwritten problem pushed the problem's own ink down into the quiz).
    */
   private onEditorUpdate(u: ViewUpdate) {
+    this.merged.onText(u);
     if (!u.docChanged || this.ownEdit) return;
     // Only the editor of the note the ink is on: a note open twice gets each edit in both editors (the
     // other one is brought up to date), which would move its ink twice.
@@ -1289,6 +1294,29 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
     }
   }
 
+  /**
+   * Editing Toolbar's undo and redo buttons (its commands) undo the last change on the page, ink or text
+   * (see MergedHistory), while the ink tools are in its bar; ours hide there. Otherwise they're its own.
+   */
+  private mergeEditingToolbarUndo() {
+    const commands = (this.app as unknown as { commands?: { commands?: Record<string, EditingToolbarCommand> } }).commands?.commands;
+    for (const [id, direction] of [["editing-toolbar:editor-undo", "undo"], ["editing-toolbar:editor-redo", "redo"]] as const) {
+      const cmd = commands?.[id];
+      if (!cmd?.callback || cmd.oniOwn) continue;
+      const own = cmd.callback;
+      cmd.oniOwn = own;
+      cmd.callback = () => {
+        if (this.toolbar.el.hasClass("oni-in-et") && this.merged.step(direction)) return;
+        return own.call(cmd);
+      };
+      this.register(() => {
+        if (cmd.oniOwn !== own) return;
+        cmd.callback = own;
+        delete cmd.oniOwn;
+      });
+    }
+  }
+
   private mountToolbar(view: FileView | null) {
     const el = this.toolbar.el;
     const kind = view ? inkKindOf(view) : null;
@@ -1312,6 +1340,7 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
       if (host.firstElementChild !== el) host.prepend(el);
       host.addClass("oni-et-host");
       this.reserveInEditingToolbar(host, el);
+      this.mergeEditingToolbarUndo();
     } else if (view && this.settings.showToolbar) {
       if (el.parentElement !== view.containerEl || el.nextElementSibling !== view.contentEl) {
         view.containerEl.insertBefore(el, view.contentEl);
@@ -1328,6 +1357,8 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
     const ignored = this.shownIgnored(target?.view ?? null);
     let inkOn = this.enabled && !ignored.ink;
     this.mountToolbar(ignored.toolbar ? null : target?.view ?? null);
+    const note = target?.view instanceof MarkdownView ? target.view : null;
+    this.merged.watch((note?.editor as unknown as { cm?: EditorView } | undefined)?.cm ?? null, note?.file?.path ?? "");
 
     // A dialog covers the whole note: the ink steps aside. Menus, popovers and floating toolbars only
     // cover part of it: those get a see-through hole in the ink layer instead (see uiHoles).
@@ -1725,6 +1756,12 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
 interface EditingToolbarPlugin {
   Leaf_Width: number;
   handleeditingToolbar_resize(): unknown;
+}
+
+/** One of Editing Toolbar's commands (undo, redo); `oniOwn` is its own callback while ours stands in. */
+interface EditingToolbarCommand {
+  callback?: () => unknown;
+  oniOwn?: () => unknown;
 }
 
 const OVER_NOTE =".menu, .suggestion-container, .popover, .oni-popover, .tooltip, .notice-container, .prompt";

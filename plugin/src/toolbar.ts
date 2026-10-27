@@ -155,8 +155,12 @@ export class Toolbar {
     this.pageTools();
     this.divider();
 
-    this.button("undo-2", "Undo", () => this.host.command("undo")).toggleClass("is-disabled", !this.canUndo);
-    this.button("redo-2", "Redo", () => this.host.command("redo")).toggleClass("is-disabled", !this.canRedo);
+    // In Editing Toolbar's bar its own undo and redo do both ink and text, so these hide (see styles.css).
+    this.el.lastElementChild?.addClass("oni-history");
+    const undo = this.button("undo-2", "Undo", () => this.host.command("undo"));
+    undo.addClasses(["oni-history", ...(this.canUndo ? [] : ["is-disabled"])]);
+    const redo = this.button("redo-2", "Redo", () => this.host.command("redo"));
+    redo.addClasses(["oni-history", ...(this.canRedo ? [] : ["is-disabled"])]);
 
     // Page and layer toggles sit on the right.
     const right = this.el.createDiv({ cls: "oni-right" });

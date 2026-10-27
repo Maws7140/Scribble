@@ -61,6 +61,10 @@
 .oni-et-slot {
   display: none !important;
 }
+/* Its own undo and redo do ink and text both there (see MergedHistory). */
+.oni-toolbar.oni-in-et .oni-history {
+  display: none;
+}
 .oni-toolbar.oni-in-et {
   align-self: stretch;
   height: auto;
