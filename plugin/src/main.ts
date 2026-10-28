@@ -1256,7 +1256,9 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
   private editingToolbarFor(view: FileView): HTMLElement | null {
     if (!this.settings.inEditingToolbar || !(view instanceof MarkdownView) || !this.editingToolbarPlugin()) return null;
     const bar = view.containerEl.querySelector<HTMLElement>('.editingToolbarModalBar[data-toolbar-style="top"]');
-    if (!bar || bar.hasClass("editing-toolbar-force-hidden") || bar.getClientRects().length === 0) return null;
+    // Its hidden marker can also reach a visible bar when another note hides its toolbar. Use the
+    // rendered state, including visibility:hidden (which still has a layout rectangle).
+    if (!bar || bar.getClientRects().length === 0 || getComputedStyle(bar).visibility !== "visible") return null;
     return bar;
   }
 
