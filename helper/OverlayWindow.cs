@@ -195,6 +195,9 @@ public sealed partial class OverlayWindow : Window
             case "lines":
                 OnLines(cmd);
                 break;
+            case "print-snapshot":
+                SnapshotForPrint(cmd);
+                break;
             case "debug":
                 Protocol.Log("layout from plugin:\n" + cmd.Message);
                 break;

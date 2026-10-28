@@ -12,6 +12,7 @@ Write on any note, PDF or picture in Obsidian with a pen, using Windows Ink (the
 - Ink to Text, Ink to Math (solve, steps, graphs, practice quizzes), handwriting search
 - Background two-way sync with OneNote (text, ink and equations)
 - Choose which folders, tags or notes get the ink tools
+- Obsidian's **Export to PDF** includes the note's ink, with text and handwriting scaled together to fit the paper
 
 ## Requirements
 

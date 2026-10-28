@@ -281,13 +281,24 @@ function topAfter(br: Element, lineHeight: number): number | null {
       const rect = range.getClientRects()[0];
       // The text's own box is the font's height; the line it's on starts half the leading above.
       if (rect) return rect.top - Math.max(0, (lineHeight - rect.height) / 2);
-    } else if (node instanceof HTMLElement) {
-      if (node.tagName === "BR") return null;
-      const rect = node.getBoundingClientRect();
+    } else if (node.nodeType === Node.ELEMENT_NODE) {
+      const element = node as HTMLElement;
+      if (element.classList.contains("oni-print-stroke")) continue;
+      if (element.tagName === "BR") return null;
+      const rect = element.getBoundingClientRect();
       if (rect.height > 0) return rect.top;
     }
   }
   return null;
+}
+
+/** Positions within a print block, converted back from Chromium's viewport scale to CSS coordinates. */
+export function printBlockLineTops(el: HTMLElement, start: number, end: number, unit: number, lineHeight: number): number[] {
+  const origin = el.getBoundingClientRect().top;
+  const section = { el: { firstElementChild: el } as unknown as HTMLElement,
+    start: { line: start }, end: { line: end }, height: 0 };
+  return blockLineTops(section, 0, el.getBoundingClientRect().height, origin, lineHeight * unit, true)
+    .map((top) => top / unit);
 }
 
 /** Reading view: on-screen sections are measured; off-screen ones use the renderer's own estimate. */

@@ -552,6 +552,34 @@
   z-index: 5;
 }
 
+/* The separate render used by Obsidian's normal PDF exporter. Per-block overlays move with that block
+   when the browser paginates; neither the live ink window nor its hidden state participates. */
+.oni-print-note {
+  container-type: inline-size;
+  position: relative;
+  overflow: visible !important;
+  block-size: auto !important;
+  print-color-adjust: exact;
+}
+.oni-print-page {
+  max-inline-size: none;
+  overflow: visible;
+  zoom: min(1, calc(100cqi / var(--oni-print-width)));
+}
+.oni-print-anchor,
+.oni-print-blank {
+  position: relative;
+}
+.oni-print-blank {
+  break-inside: avoid;
+}
+.oni-print-stroke {
+  position: absolute;
+  overflow: visible;
+  pointer-events: none;
+  z-index: 5;
+}
+
 /* Settings: the toolbar buttons and pens listed under their heading. */
 .oni-setting-indent {
   padding-left: var(--size-4-6);

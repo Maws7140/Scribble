@@ -15,6 +15,7 @@ import { EditGesture, applyEditGesture } from "./editgesture";
 import { DomInk, DomUpdate } from "./domink";
 import { lineShifts } from "./lineshift";
 import { MergedHistory } from "./undo";
+import { InkPrint, PrintReference, PrintStroke } from "./print";
 
 /**
  * Drives a native Windows Ink overlay (helper/InkOverlay.exe) that sits over the active note.
@@ -51,6 +52,10 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
   private domInk = new DomInk();
   /** One undo for ink and text, for Editing Toolbar's undo and redo when the ink tools are in its bar. */
   private merged = new MergedHistory((command) => this.command(command));
+  private printing = new InkPrint(this);
+  private printId = 0;
+  private printRequests = new Map<number, { resolve: (snapshot: string | null) => void; reject: (error: Error) => void }>();
+  private printWorkers = new Set<ChildProcessWithoutNullStreams>();
 
   async onload() {
     await this.loadSettings();
@@ -60,6 +65,7 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
     this.sendTool();
 
     this.addSettingTab(new InkSettingTab(this.app, this));
+    this.registerMarkdownPostProcessor((el, ctx) => this.printing.process(el, ctx), 10000);
     // Switching light/dark changes how neutral pen colours are shown.
     this.registerEvent(this.app.workspace.on("css-change", () => this.toolbar.render()));
     this.addRibbonIcon("pen-tool", "Toggle ink layer", () => this.toggleLayer());
@@ -273,6 +279,10 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
 
   onunload() {
     this.unloading = true;
+    for (const request of this.printRequests.values()) request.reject(new Error("OneNote Ink was unloaded during PDF export."));
+    this.printRequests.clear();
+    for (const proc of this.printWorkers) proc.kill();
+    this.printWorkers.clear();
     cancelAnimationFrame(this.frame);
     for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
       if (leaf.view instanceof MarkdownView) clearBlankSpace(leaf.view);
@@ -297,6 +307,82 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
     // Rule lines were on/off before there were spacings and grids.
     if (this.settings.ruled && this.settings.pageLines === "none") { this.settings.pageLines = "text"; this.settings.ruled = false; }
     this.settings.active = Math.min(this.settings.active, this.settings.slots.length - 1);
+  }
+
+  // ---------- PDF export ----------
+
+  printReference(notePath: string): PrintReference {
+    const view = this.app.workspace.getLeavesOfType("markdown").map((leaf) => leaf.view)
+      .find((view): view is MarkdownView => view instanceof MarkdownView && view.file?.path === notePath);
+    if (view) {
+      const sizer = view.contentEl.querySelector<HTMLElement>(view.getMode() === "preview" ? ".markdown-preview-sizer" : ".cm-sizer");
+      if (sizer) {
+        const column = textColumn(view, sizer);
+        const width = sizer.getBoundingClientRect().width || parseFloat(getComputedStyle(sizer).width) || 800;
+        return { width, left: column.left, textWidth: column.width || width,
+          lineHeight: parseFloat(getComputedStyle(sizer).lineHeight) || 24,
+          tops: lineTops(view, sizer, (this.inkBottom.get(this.inkPathFor(this.vaultPath() ?? "", notePath)) ?? 0) > 0)?.tops };
+      }
+    }
+    return { width: 800, left: 0, textWidth: 800, lineHeight: 24 };
+  }
+
+  async printSnapshot(file: TFile, hashes: number[], reference: PrintReference): Promise<PrintStroke[]> {
+    const base = this.vaultPath();
+    if (!base || this.ignoreFor(file).ink) return [];
+    let snapshot: string | null = null;
+    if (this.loadedPath === file.path && this.helper?.stdin.writable) {
+      const id = ++this.printId;
+      snapshot = await new Promise<string | null>((resolve, reject) => {
+        const timeout = window.setTimeout(() => {
+          this.printRequests.delete(id);
+          reject(new Error("OneNote Ink: the pen helper did not provide its latest ink. Restart the ink helper and retry PDF export."));
+        }, 30_000);
+        this.printRequests.set(id, {
+          resolve: (data) => { window.clearTimeout(timeout); resolve(data); },
+          reject: (error) => { window.clearTimeout(timeout); reject(error); },
+        });
+        this.send({ type: "print-snapshot", id, inkPath: this.inkPathFor(base, file.path) });
+      });
+    }
+    const exe = path.join(base, this.manifest.dir!, "helper", "InkOverlay.exe");
+    return new Promise<PrintStroke[]>((resolve, reject) => {
+      const proc = spawn(exe, ["--print-ink"], { stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+      this.printWorkers.add(proc);
+      const timeout = window.setTimeout(() => {
+        proc.kill();
+        reject(new Error("OneNote Ink: timed out rendering ink for PDF export."));
+      }, 30_000);
+      let buffered = "";
+      let received = false;
+      const fail = (error: Error) => { window.clearTimeout(timeout); reject(error); };
+      proc.stdout.setEncoding("utf8");
+      proc.stdout.on("data", (chunk: string) => {
+        buffered += chunk;
+        let end: number;
+        while ((end = buffered.indexOf("\n")) >= 0) {
+          const line = buffered.slice(0, end);
+          buffered = buffered.slice(end + 1);
+          try {
+            const msg = JSON.parse(line) as { type?: string; error?: string; strokes?: PrintStroke[] };
+            if (msg.type !== "print-ink") continue;
+            received = true;
+            window.clearTimeout(timeout);
+            if (msg.error) reject(new Error(msg.error));
+            else resolve(msg.strokes ?? []);
+          } catch { /* optional renderer diagnostics, not a response */ }
+        }
+      });
+      proc.stderr.on("data", (data: Buffer) => console.error("[onenote-ink] PDF renderer:", data.toString()));
+      proc.on("error", fail);
+      proc.stdin.on("error", fail);
+      proc.on("close", () => {
+        this.printWorkers.delete(proc);
+        window.clearTimeout(timeout);
+        if (!received) reject(new Error("OneNote Ink: the PDF renderer stopped before returning its ink."));
+      });
+      proc.stdin.end(JSON.stringify({ inkPath: this.inkPathFor(base, file.path), hashes, tops: reference.tops, snapshot }) + "\n");
+    });
   }
 
   // ---------- ToolbarHost ----------
@@ -504,6 +590,13 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
       return;
     }
     switch (msg.type) {
+      case "print-snapshot": {
+        const request = this.printRequests.get(msg.id ?? -1);
+        this.printRequests.delete(msg.id ?? -1);
+        if (msg.error) request?.reject(new Error(msg.error));
+        else request?.resolve((msg as unknown as { data?: string }).data ?? null);
+        break;
+      }
       case "history":
         this.toolbar.setHistory(!!msg.canUndo, !!msg.canRedo);
         this.merged.onInk(msg.steps ?? 0, !!msg.added, !!msg.reset, !!msg.canUndo, !!msg.canRedo);

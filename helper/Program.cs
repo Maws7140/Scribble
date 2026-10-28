@@ -31,6 +31,7 @@ public sealed class Command
     // CSS px per ink unit: 1 for notes; for PDFs (ink in PDF points) and images (ink in image pixels) the zoom.
     public double Zoom { get; set; } = 1;
     public string? InkPath { get; set; }
+    public string? Snapshot { get; set; }       // read-only ISF snapshot for the separate PDF renderer
     public bool Dark { get; set; }
     // Obsidian UI over the note (menus, popovers, other plugins' floating toolbars), CSS px in the viewport:
     // the ink layer leaves these see-through, so they show and take the pen instead of the ink.
@@ -213,6 +214,7 @@ public static partial class Program
     [STAThread]
     public static int Main(string[] args)
     {
+        if (args.Length > 0 && args[0] == "--print-ink") return OverlayWindow.RunPrintWorker();
         // Copies of this program the helper starts itself: the Fix it math panel, the handwriting reader.
         if (args.Length > 0 && args[0] == "--math-panel") return MathInput.RunPanel();
         if (args.Length > 1 && args[0] == "--index-files") return OverlayWindow.IndexFiles(args.Skip(1));
