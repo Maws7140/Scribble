@@ -378,7 +378,7 @@ public sealed partial class OverlayWindow
         ToTrueColors(strokes);
         // A pasted stroke is anchored where it lands, not to the line it was copied from.
         foreach (var s in strokes)
-            foreach (var id in new[] { AnchorLineId, AnchorTopId, AboveHashId, AboveOffsetId, BelowHashId, BelowOffsetId })
+            foreach (var id in new[] { AnchorLineId, AnchorTopId, AnchorModelId, AboveHashId, AboveOffsetId, BelowHashId, BelowOffsetId })
                 if (s.ContainsPropertyData(id)) s.RemovePropertyData(id);
         ToDisplay(strokes);
         Pens.Stylize(strokes);

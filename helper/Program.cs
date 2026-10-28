@@ -53,6 +53,8 @@ public sealed class Command
     // "lines": where each source line sits (CSS px from the text column top), in the given mode.
     public string? Mode { get; set; }            // source | preview
     public double[]? Tops { get; set; }
+    // Live Preview: each line's place before one-piece blocks' lines were spread over them (see Anchors).
+    public double[]? BlockTops { get; set; }
     // Lines whose positions are measured (on/near screen) rather than estimated, 0-based inclusive.
     public int? MeasuredFrom { get; set; }
     public int? MeasuredTo { get; set; }

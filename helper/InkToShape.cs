@@ -120,7 +120,9 @@ public sealed partial class OverlayWindow
         var clean = new Stroke(points, da);
         // Keep the hand-drawn stroke's line anchor so the shape stays with the same text (for a two-stroke
         // arrow, the first stroke's: the new one was anchored with it anyway, being drawn right after).
-        if (TryGetAnchor(shape.UsesPrevious ? previous! : e.Stroke, out var line, out var top)) SetAnchor(clean, line, top);
+        var anchored = shape.UsesPrevious ? previous! : e.Stroke;
+        if (TryGetAnchor(anchored, out var line, out var top))
+            SetAnchor(clean, line, top, markModel: anchored.ContainsPropertyData(AnchorModelId));
         // Replaced together, so a single undo brings back the hand-drawn strokes (history snapshots are debounced).
         if (shape.UsesPrevious) ink.Strokes.Remove(previous!);
         ink.Strokes.Replace(e.Stroke, new StrokeCollection { clean });

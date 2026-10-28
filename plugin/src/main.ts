@@ -1597,12 +1597,13 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
     const hashes = lineHashes(text.split("\n"));
     if (hashes.length !== layout.tops.length) return; // layout and text out of step; next pass
     const tops = layout.tops.map((t) => Math.round(t * 2) / 2);
-    const key = `${mode}|${inkPath}|${layout.measuredFrom}-${layout.measuredTo}|${tops.join(",")}|${hashes.join(",")}`;
+    const blockTops = layout.blockTops?.map((t) => Math.round(t * 2) / 2);
+    const key = `${mode}|${inkPath}|${layout.measuredFrom}-${layout.measuredTo}|${tops.join(",")}|${hashes.join(",")}|${blockTops?.join(",") ?? ""}`;
     if (key === this.lastLines) return;
     // Record what the layout looked like a moment after each mode/note switch (once it has settled).
     const switched = !this.lastLines.startsWith(`${mode}|${inkPath}|`);
     this.lastLines = key;
-    this.send({ type: "lines", inkPath, mode, tops, hashes, measuredFrom: layout.measuredFrom, measuredTo: layout.measuredTo });
+    this.send({ type: "lines", inkPath, mode, tops, blockTops, hashes, measuredFrom: layout.measuredFrom, measuredTo: layout.measuredTo });
     if (switched) {
       window.setTimeout(() => {
         if (this.activeNote() !== view) return;

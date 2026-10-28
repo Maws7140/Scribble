@@ -9,6 +9,11 @@ import type { EditorView } from "@codemirror/view";
  */
 export interface LineLayout {
   tops: number[];
+  /**
+   * Live Preview only: where each line was placed before lines inside one-piece blocks were spread over
+   * them (every line at its block's top). The helper re-anchors ink saved under that once (see editorTops).
+   */
+  blockTops?: number[];
   /** 0-based lines whose positions are measured (on/near screen) rather than estimated. */
   measuredFrom: number;
   measuredTo: number;
@@ -48,17 +53,37 @@ export function editorOf(view: MarkdownView): EditorView | undefined {
   return (view.editor as unknown as { cm?: EditorView }).cm;
 }
 
-/** Live Preview / Source: CodeMirror knows every line's block, rendered or not. */
+/**
+ * Live Preview / Source: CodeMirror knows every line's block, rendered or not. A block it draws as one piece
+ * (columns, maths, a table, a callout, an embed, other plugins' blocks) covers several source lines, all
+ * with the block's top; those lines are spread evenly down the block instead, as in Reading view. Ink
+ * written by the block then belongs to a line near it and moves in proportion with the block in the other
+ * view. With every line at the top, ink in a tall block (a column of handwriting beside two columns of
+ * notes) was all tied to its last line, which Reading view puts below the block, and the ink went with it.
+ */
 function editorTops(view: MarkdownView, sizerTop: number): LineLayout | null {
   const cm = editorOf(view);
   if (!cm) return null;
   const doc = cm.state.doc;
   const offset = cm.documentTop - sizerTop;
   const tops = new Array<number>(doc.lines);
-  for (let i = 1; i <= doc.lines; i++) tops[i - 1] = cm.lineBlockAt(doc.line(i).from).top + offset;
+  const blockTops = new Array<number>(doc.lines);
+  for (let i = 1; i <= doc.lines;) {
+    const block = cm.lineBlockAt(doc.line(i).from);
+    const n = Math.max(1, doc.lineAt(Math.min(block.to, doc.length)).number - i + 1);
+    for (let k = 0; k < n && i + k <= doc.lines; k++) {
+      blockTops[i - 1 + k] = block.top + offset;
+      tops[i - 1 + k] = block.top + offset + (k / n) * block.height;
+    }
+    i += n;
+  }
   // CodeMirror measures the lines it has rendered (its viewport); the rest are height estimates.
+  // Raw Source has no rendered blocks to migrate against; its plain line positions cannot finish an
+  // old Live Preview block's repair. Match the same mode check used to hide ink in Source mode.
+  const livePreview = view.contentEl.querySelector(".markdown-source-view")?.classList.contains("is-live-preview");
   return {
     tops,
+    blockTops: livePreview ? blockTops : undefined,
     measuredFrom: doc.lineAt(cm.viewport.from).number - 1,
     measuredTo: doc.lineAt(cm.viewport.to).number - 1,
   };
@@ -203,10 +228,10 @@ export function clearBlankSpace(view: MarkdownView) {
 
 /**
  * Where each source line of one rendered block starts, as Live Preview has them, so ink by any of its lines
- * sits in the same place in both views: a paragraph's lines at its line breaks, a list's at its items, a
- * code block's line by line. What Live Preview draws as one piece (maths, tables, callouts, embeds, other
- * plugins' blocks) has all its lines at its top there, so here too. (Spreading every block's lines evenly
- * over it put a line under a tall image halfway down the image, and the ink written by it with it.)
+ * sits in the same place in both views: a paragraph's lines at its line breaks, a list's at its items. A
+ * block drawn as one piece (columns, maths, tables, callouts, embeds, code) has its lines spread evenly down
+ * it, as Live Preview does (see editorTops), so ink beside it moves in proportion with it. (Spreading a
+ * paragraph's lines put a line under a tall image halfway down the image, and the ink written by it.)
  * Off screen (not `measured`) the block isn't laid out: an even spread is the estimate.
  */
 function blockLineTops(s: PreviewSection, top: number, bottom: number, sizerTop: number, lineHeight: number, measured: boolean): number[] {
@@ -215,9 +240,7 @@ function blockLineTops(s: PreviewSection, top: number, bottom: number, sizerTop:
   if (n === 1) return [top];
   const first = s.el.firstElementChild;
   const tag = first?.tagName;
-  if (!first || !(tag === "P" || tag === "BLOCKQUOTE" || tag === "UL" || tag === "OL" || tag === "PRE")) return spread.map(() => top);
-  if (tag === "PRE") return first.querySelector(":scope > code") ? spread : spread.map(() => top);
-  if (!measured) return spread;
+  if (!first || !measured || !(tag === "P" || tag === "BLOCKQUOTE" || tag === "UL" || tag === "OL")) return spread;
 
   const tops = spread.slice();
   if (tag === "UL" || tag === "OL") {

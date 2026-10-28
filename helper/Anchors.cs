@@ -28,12 +28,18 @@ public sealed partial class OverlayWindow
     internal static readonly Guid AboveOffsetId = new("3b1d6f0e-8a2c-4f5b-9e71-2c4d5a6b7c91");
     internal static readonly Guid BelowHashId = new("3b1d6f0e-8a2c-4f5b-9e71-2c4d5a6b7c92");
     internal static readonly Guid BelowOffsetId = new("3b1d6f0e-8a2c-4f5b-9e71-2c4d5a6b7c93");
+    /// <summary>
+    /// Anchored with lines inside one-piece blocks spread over the block (2). Without it, an anchor from when
+    /// they all had the block's top: re-anchored once, in Live Preview (see MigrateBlockAnchors).
+    /// </summary>
+    internal static readonly Guid AnchorModelId = new("3b1d6f0e-8a2c-4f5b-9e71-2c4d5a6b7c94");
 
     const double GroupMs = 1500;    // strokes this soon after the last one, and...
     const double GroupGap = 40;     // ...this close to it, belong to the same word/drawing
 
     double[]? tops;
-    int[]? hashes;                  // per line: fingerprint of its text, 0 = blank / frontmatter
+    double[]? blockTops;            // Live Preview: lines at their block's top, as anchors before model 2 had them
+    int[]? hashes;                 // per line: fingerprint of its text, 0 = blank / frontmatter
     readonly Dictionary<int, int> hashCount = new();
     string? topsMode;
     (int from, int to) measured;
@@ -59,10 +65,11 @@ public sealed partial class OverlayWindow
     }
 
     /// <summary>Anchor a stroke to a line, and (when the note's text is known) record the text around it.</summary>
-    void SetAnchor(Stroke s, int line, double top)
+    void SetAnchor(Stroke s, int line, double top, bool markModel = true)
     {
         s.AddPropertyData(AnchorLineId, line);
         s.AddPropertyData(AnchorTopId, top);
+        if (markModel) s.AddPropertyData(AnchorModelId, 2);
         if (hashes == null || line < 0 || line >= hashes.Length) return;
         SetRef(s, AboveHashId, AboveOffsetId, FindRef(line, -1), line);
         SetRef(s, BelowHashId, BelowOffsetId, FindRef(line + 1, +1), line);
@@ -144,6 +151,7 @@ public sealed partial class OverlayWindow
         if (cmd.Mode != topsMode)
             Protocol.Log($"lines: {cmd.Mode}, {cmd.Tops!.Length} lines, measured {cmd.MeasuredFrom}-{cmd.MeasuredTo}");
         tops = cmd.Tops;
+        blockTops = cmd.Mode == "source" && cmd.BlockTops?.Length == cmd.Tops!.Length ? cmd.BlockTops : null;
         hashes = cmd.Hashes != null && cmd.Hashes.Length == cmd.Tops!.Length ? cmd.Hashes : null;
         hashCount.Clear();
         if (hashes != null) foreach (var h in hashes) if (h != 0) hashCount[h] = hashCount.GetValueOrDefault(h) + 1;
@@ -179,6 +187,7 @@ public sealed partial class OverlayWindow
     void ResetAnchors()
     {
         tops = null;
+        blockTops = null;
         hashes = null;
         hashCount.Clear();
         topsMode = null;
@@ -206,11 +215,14 @@ public sealed partial class OverlayWindow
         // only, in clusters so a drawing made of separate strokes stays in one piece.
         // (Never against Reading view; PDF pages and images are fully measured, so anchor there too.)
         if (topsMode != "preview") AnchorLegacy(ink.Strokes.Where(s => !TryGetAnchor(s, out _, out _)).ToList());
+        if (blockTops != null && MigrateBlockAnchors()) moved = true;
 
         int skipped = 0;
         foreach (var s in ink.Strokes)
         {
             if (!TryGetAnchor(s, out var line, out var refTop)) continue;
+            // Placed by MigrateBlockAnchors already (and still on the older anchor, off screen).
+            if (blockTops != null && !s.ContainsPropertyData(AnchorModelId)) continue;
             line = Relocate(s, line);
             // A line the note doesn't have right now (it's still loading, or the text was cut): leave the
             // stroke exactly as it is, anchor and all, rather than forcing it onto some other line.
@@ -221,12 +233,14 @@ public sealed partial class OverlayWindow
                 s.Transform(new Matrix(1, 0, 0, 1, 0, d), false);
                 moved = true;
             }
-            SetAnchor(s, line, tops[line]);
+            // Moving an old anchor in Reading view is not its migration: that needs a measured Live
+            // Preview block. Preserve its old model until MigrateBlockAnchors has actually repaired it.
+            SetAnchor(s, line, tops[line], markModel: s.ContainsPropertyData(AnchorModelId));
         }
         if (skipped > 0) Protocol.Log($"{skipped} strokes are on lines past the end of the note ({tops.Length} lines); left as they are");
         if (moved)
         {
-            // Positions changed, not content: save, but don't make it an undo step.
+            // Positions or anchor metadata changed, not content: save, but don't make it an undo step.
             dirty = true;
             saveDebounce.Stop();
             saveDebounce.Start();
@@ -283,14 +297,18 @@ public sealed partial class OverlayWindow
             && Gap(lastStroke.GetBounds(), b) < GroupGap
             && TryGetAnchor(lastStroke, out var l1, out var t1))
         {
-            SetAnchor(s, l1, t1);
+            SetAnchor(s, l1, t1, markModel: lastStroke.ContainsPropertyData(AnchorModelId));
             return;
         }
         // Touching existing ink (a cross on a t, an arrow onto a diagram): share that anchor.
         foreach (var other in ink.Strokes)
         {
             if (other == s || !TryGetAnchor(other, out var l2, out var t2)) continue;
-            if (Gap(other.GetBounds(), b) < 3 && Touching(other, s, 3)) { SetAnchor(s, l2, t2); return; }
+            if (Gap(other.GetBounds(), b) < 3 && Touching(other, s, 3))
+            {
+                SetAnchor(s, l2, t2, markModel: other.ContainsPropertyData(AnchorModelId));
+                return;
+            }
         }
         // Otherwise: the line under the stroke's middle.
         int line = LineAt(b.Top + b.Height / 2);
@@ -305,6 +323,22 @@ public sealed partial class OverlayWindow
     void AnchorLegacy(List<Stroke> strokes)
     {
         if (tops == null || strokes.Count == 0) return;
+        int anchored = 0;
+        foreach (var (cluster, b) in Clusters(strokes))
+        {
+            int line = LineAt(b.Top + b.Height / 2);
+            // Only against measured lines: an estimated position would make the ink jump once it's measured.
+            // Clusters further away get anchored when scrolled near.
+            if (line < measured.from || line > measured.to) continue;
+            foreach (var s in cluster) SetAnchor(s, line, tops[line]);
+            anchored += cluster.Count;
+        }
+        if (anchored > 0) Protocol.Log($"anchored {anchored} older strokes to their lines");
+    }
+
+    /// <summary>Strokes that touch, together, with their bounds: a drawing made of separate strokes stays one piece.</summary>
+    static IEnumerable<(List<Stroke> strokes, Rect bounds)> Clusters(List<Stroke> strokes)
+    {
         var bounds = strokes.Select(s => s.GetBounds()).ToList();
         var parent = Enumerable.Range(0, strokes.Count).ToArray();
         int Find(int i) { while (parent[i] != i) i = parent[i] = parent[parent[i]]; return i; }
@@ -312,20 +346,62 @@ public sealed partial class OverlayWindow
             for (int j = i + 1; j < strokes.Count; j++)
                 if (Gap(bounds[i], bounds[j]) < LegacyClusterGap && Touching(strokes[i], strokes[j], LegacyClusterGap))
                     parent[Find(i)] = Find(j);
-
-        int anchored = 0;
-        foreach (var cluster in Enumerable.Range(0, strokes.Count).GroupBy(Find))
+        foreach (var group in Enumerable.Range(0, strokes.Count).GroupBy(Find))
         {
             var b = Rect.Empty;
-            foreach (var i in cluster) b.Union(bounds[i]);
-            int line = LineAt(b.Top + b.Height / 2);
-            // Only against measured lines: an estimated position would make the ink jump once it's measured.
-            // Clusters further away get anchored when scrolled near.
-            if (line < measured.from || line > measured.to) continue;
-            foreach (var i in cluster) SetAnchor(strokes[i], line, tops[line]);
-            anchored += cluster.Count();
+            foreach (var i in group) b.Union(bounds[i]);
+            yield return (group.Select(i => strokes[i]).ToList(), b);
         }
-        if (anchored > 0) Protocol.Log($"anchored {anchored} older strokes to their lines");
+    }
+
+    /// <summary>
+    /// Ink anchored before lines inside one-piece blocks (columns, maths, tables, callouts) were spread down
+    /// the block, when all of a block's lines had its top: everything written beside a tall block was tied to
+    /// its last line, and in Reading view that line is below the block. In Live Preview (blockTops), put such
+    /// ink where that anchor had it, then anchor it afresh to the line it's beside, in clusters. Ink not by
+    /// such a block just takes the new mark. Off-screen clusters wait (their lines are only estimates) and
+    /// keep the older anchor. True if points or anchor metadata changed, so repairs are saved even when
+    /// none of the points had to move.
+    /// </summary>
+    bool MigrateBlockAnchors()
+    {
+        bool changed = false;
+        var inBlocks = new List<Stroke>();
+        foreach (var s in ink.Strokes)
+        {
+            if (s.ContainsPropertyData(AnchorModelId) || !TryGetAnchor(s, out var oldLine, out var refTop)) continue;
+            int line = Relocate(s, oldLine);
+            if (line < 0 || line >= tops!.Length) continue;
+            double d = blockTops![line] - refTop;
+            if (Math.Abs(d) >= 0.25)
+            {
+                s.Transform(new Matrix(1, 0, 0, 1, 0, d), false);
+                changed = true;
+            }
+            if (Math.Abs(blockTops[line] - tops[line]) < 0.25)
+            {
+                SetAnchor(s, line, tops[line]);
+                changed = true;
+            }
+            else
+            {
+                s.AddPropertyData(AnchorLineId, line);
+                s.AddPropertyData(AnchorTopId, blockTops[line]);
+                if (line != oldLine) changed = true;
+                inBlocks.Add(s);
+            }
+        }
+        int anchored = 0;
+        foreach (var (cluster, b) in Clusters(inBlocks))
+        {
+            int line = LineAt(b.Top + b.Height / 2);
+            if (line < measured.from || line > measured.to) continue;
+            foreach (var s in cluster) SetAnchor(s, line, tops![line]);
+            changed = true;
+            anchored += cluster.Count;
+        }
+        if (anchored > 0) Protocol.Log($"re-anchored {anchored} strokes beside blocks to the lines they're by");
+        return changed;
     }
 
     /// <summary>Strokes moved or resized with the lasso: re-anchor them together where they landed.</summary>

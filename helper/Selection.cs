@@ -271,7 +271,7 @@ public sealed partial class OverlayWindow
                 if (selected.Count == 0) return;
                 var copy = new StrokeCollection(selected.Select(s => s.Clone()));
                 foreach (var s in copy)
-                    foreach (var id in new[] { AnchorLineId, AnchorTopId, AboveHashId, AboveOffsetId, BelowHashId, BelowOffsetId, StrokeTimeId })
+                    foreach (var id in new[] { AnchorLineId, AnchorTopId, AnchorModelId, AboveHashId, AboveOffsetId, BelowHashId, BelowOffsetId, StrokeTimeId })
                         if (s.ContainsPropertyData(id)) s.RemovePropertyData(id);
                 copy.Transform(new Matrix(1, 0, 0, 1, 16 / Zoom, 16 / Zoom), false);
                 ink.Strokes.Add(copy);
