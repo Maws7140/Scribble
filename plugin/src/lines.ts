@@ -163,9 +163,12 @@ function reserveBlankSpace(view: MarkdownView, r: PreviewRenderer, sizerTop: num
     const s = sections[i];
     if (!s.el || !s.start || !s.end) continue;
     let top = px(s.el.style.marginTop);
-    let bottom = px(s.el.style.paddingBottom);
+    // Only the last block keeps space below it (worked out below); any other has none. Reading view builds
+    // a long note in stages, and a block that was last for a moment kept the end-of-note space after the
+    // rest arrived below it: a gap of every blank line to the end of the note, pushing the text out of view.
+    let bottom = 0;
     if (!on) {
-      top = bottom = 0;
+      top = 0;
     } else {
       const prevEnd = i > 0 ? sections[i - 1].end.line : -1;
       const want = Math.max(0, s.start.line - prevEnd - 1) * lineHeight;
@@ -178,7 +181,15 @@ function reserveBlankSpace(view: MarkdownView, r: PreviewRenderer, sizerTop: num
       } else if (top > want) {
         top = want;
       }
-      if (i === sections.length - 1) bottom = Math.max(0, count - 1 - s.end.line) * lineHeight;
+      // Trailing blank lines, if what follows this block really is just blank lines (not text that Reading
+      // view hasn't built yet).
+      if (i === sections.length - 1) {
+        let trailing = 0;
+        for (let l = s.end.line + 1; l < count; l++, trailing++) {
+          if (view.editor?.getLine(l)?.trim()) { trailing = 0; break; }
+        }
+        bottom = trailing * lineHeight;
+      }
     }
     if (top !== px(s.el.style.marginTop) || bottom !== px(s.el.style.paddingBottom) || s.el.style.paddingTop) plan.push({ el: s.el, top, bottom });
   }
