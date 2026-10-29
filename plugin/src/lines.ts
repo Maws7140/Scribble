@@ -128,13 +128,21 @@ function contentBox(el: HTMLElement, sizerTop: number): { top: number; bottom: n
     return { top: first.getBoundingClientRect().top - sizerTop, bottom: last.getBoundingClientRect().bottom - sizerTop };
   }
   const b = el.getBoundingClientRect();
-  return { top: b.top + px(el.style.paddingTop) - sizerTop, bottom: b.bottom - px(el.style.paddingBottom) - sizerTop };
+  return { top: b.top - sizerTop, bottom: b.bottom - px(el.style.paddingBottom) - sizerTop };
 }
 
+/**
+ * The space above a block is a top margin, not padding: padding stops the block's first paragraph's margin
+ * from collapsing into the one above, so adding a few px of it widened the gap by a whole margin as well,
+ * the next pass took it out again, and the text jumped up and down by that much, over and over (worst
+ * while scrolling). A margin collapses with the paragraph's own, so the gap settles at one line height.
+ * Below the last block (trailing blank lines) it stays padding: nothing is measured against that.
+ */
 function setSpace(el: HTMLElement, top: number, bottom: number) {
-  const pt = top > 0 ? `${top}px` : "";
+  const mt = top > 0 ? `${top}px` : "";
   const pb = bottom > 0 ? `${bottom}px` : "";
-  if (el.style.paddingTop !== pt) el.style.paddingTop = pt;
+  if (el.style.marginTop !== mt) el.style.marginTop = mt;
+  if (el.style.paddingTop) el.style.paddingTop = ""; // from versions that padded
   if (el.style.paddingBottom !== pb) el.style.paddingBottom = pb;
   if (top > 0 || bottom > 0) el.dataset.oniSpace = "1";
   else delete el.dataset.oniSpace;
@@ -154,7 +162,7 @@ function reserveBlankSpace(view: MarkdownView, r: PreviewRenderer, sizerTop: num
   for (let i = 0; i < sections.length; i++) {
     const s = sections[i];
     if (!s.el || !s.start || !s.end) continue;
-    let top = px(s.el.style.paddingTop);
+    let top = px(s.el.style.marginTop);
     let bottom = px(s.el.style.paddingBottom);
     if (!on) {
       top = bottom = 0;
@@ -172,7 +180,7 @@ function reserveBlankSpace(view: MarkdownView, r: PreviewRenderer, sizerTop: num
       }
       if (i === sections.length - 1) bottom = Math.max(0, count - 1 - s.end.line) * lineHeight;
     }
-    if (top !== px(s.el.style.paddingTop) || bottom !== px(s.el.style.paddingBottom)) plan.push({ el: s.el, top, bottom });
+    if (top !== px(s.el.style.marginTop) || bottom !== px(s.el.style.paddingBottom) || s.el.style.paddingTop) plan.push({ el: s.el, top, bottom });
   }
   for (const p of plan) setSpace(p.el, p.top, p.bottom);
 }
@@ -182,9 +190,15 @@ function measurable(el: HTMLElement): boolean {
   return el.isConnected && el.getClientRects().length > 0 && el.getBoundingClientRect().height >= 1;
 }
 
-/** Bottom of the nearest element drawn above `el` (skipping hidden blocks and the renderer's spacer). */
+/**
+ * Bottom of the nearest element drawn above `el`, skipping hidden blocks (the frontmatter, shown as the
+ * properties header above it). Nothing (null) when the block above isn't loaded: Reading view swaps blocks
+ * scrolled far out of view for a spacer of their estimated height, and measuring against that changed the
+ * space mid-scroll and moved the text.
+ */
 function visibleAboveBottom(el: HTMLElement, sizerTop: number): number | null {
   for (let p = el.previousElementSibling; p; p = p.previousElementSibling) {
+    if (p.classList.contains("markdown-preview-pusher")) return null;
     if (p instanceof HTMLElement && measurable(p)) {
       // Its own box (minus any space we added below it), not its children: a header can be taller than them.
       return p.getBoundingClientRect().bottom - px(p.style.paddingBottom) - sizerTop;
@@ -207,7 +221,7 @@ export function describeLayout(view: MarkdownView, sizer: HTMLElement, area: DOM
   const kids = Array.from(sizer.children).slice(0, 12).map((c) => {
     const e = c as HTMLElement;
     const shown = e.getClientRects().length > 0;
-    return `  <${e.tagName.toLowerCase()} class="${e.className}"${e.style.paddingTop ? ` padTop=${e.style.paddingTop}` : ""}> ${shown ? r(e.getBoundingClientRect()) : "hidden"}` +
+    return `  <${e.tagName.toLowerCase()} class="${e.className}"${e.style.marginTop ? ` spaceTop=${e.style.marginTop}` : ""}> ${shown ? r(e.getBoundingClientRect()) : "hidden"}` +
       (e.firstElementChild ? ` first=<${e.firstElementChild.tagName.toLowerCase()}.${(e.firstElementChild as HTMLElement).className}> ${(e.firstElementChild as HTMLElement).getClientRects().length ? r(e.firstElementChild.getBoundingClientRect()) : "hidden"}` : "");
   });
   out.push("sizer children:", ...kids);
@@ -346,7 +360,7 @@ function previewTops(view: MarkdownView, sizer: HTMLElement, sizerTop: number, h
     } else {
       const est = r.getSectionTop(s);
       if (est < 0) continue;
-      contentTop = est + offset + px(s.el.style.paddingTop);
+      contentTop = est + offset + px(s.el.style.marginTop);
       contentBottom = est + offset + (s.height || 0) - px(s.el.style.paddingBottom);
     }
     // Blank lines before this block, one line height apart, ending one line above it: as in Live Preview.
