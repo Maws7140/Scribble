@@ -61,6 +61,11 @@
 .oni-et-slot {
   display: none !important;
 }
+/* On a canvas it won't re-fit its buttons (it only does for notes): what doesn't fit is cut off at the
+   right, past the ink tools, with its dropdowns still free to open downwards. */
+.oni-et-host.oni-et-canvas {
+  overflow-x: clip;
+}
 /* Its own undo and redo do ink and text both there (see MergedHistory). */
 .oni-toolbar.oni-in-et .oni-history {
   display: none;
@@ -515,6 +520,11 @@
 /* The note's own copy of its ink (drawn in the page so it scrolls with the text; see domink.ts). */
 .oni-ink-host {
   position: relative;
+}
+/* On a canvas: above every card, even a focused one. */
+.canvas > .oni-ink-svg {
+  z-index: 1000000;
+  pointer-events: none;
 }
 /* A split pane keeps the note's full-width page (see keepPageWidth) and scrolls sideways to the rest. */
 .oni-page-scroller {

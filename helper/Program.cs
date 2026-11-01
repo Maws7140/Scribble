@@ -54,6 +54,11 @@ public sealed class Command
     // "lines": where each source line sits (CSS px from the text column top), in the given mode.
     public string? Mode { get; set; }            // source | preview
     public double[]? Tops { get; set; }
+    // A canvas ("canvas" mode): each "line" is the board or a card; these and Tops are its rectangle.
+    public double[]? Lefts { get; set; }
+    public double[]? Widths { get; set; }
+    public double[]? Heights { get; set; }
+    public double? Extent { get; set; }          // how big the ink layer must be (it's square), in ink units
     // Live Preview: each line's place before one-piece blocks' lines were spread over them (see Anchors).
     public double[]? BlockTops { get; set; }
     // Lines whose positions are measured (on/near screen) rather than estimated, 0-based inclusive.

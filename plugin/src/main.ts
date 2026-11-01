@@ -5,7 +5,7 @@ import { DEFAULT_SETTINGS, DEFAULT_SLOTS, ERASER_SIZES, Ignored, InkSettings, NO
 import { Toolbar, ToolbarHost } from "./toolbar";
 import { clearBlankSpace, describeLayout, lineHashes, lineTops } from "./lines";
 import { OverwriteModal, PullModal, SyncState, TextChange, applyTextChanges, noteBlocks, textColumn, withoutEchoes } from "./onenote";
-import { InkKind, imageLayout, inkFileFor, inkKindOf, pdfLayout } from "./targets";
+import { InkKind, canvasLayout, imageLayout, inkFileFor, inkKindOf, pdfLayout } from "./targets";
 import { HandwritingIndex, HandwritingSearchModal, RecognizedLine, documentFor, insertRecognized, replaceLines } from "./writing";
 import { MATH_VIEW, MathHost, MathSource, MathView, readTyped } from "./math/pane";
 import { MathSettings } from "./math/engine";
@@ -1342,12 +1342,13 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
   }
 
   /**
-   * The Editing Toolbar plugin's bar above this note, when the ink tools are to sit in it (a setting): its
-   * top bar (the one that's always there), while it shows. PDFs, images, its other styles, or the plugin
-   * off: the ink tools keep their own bar.
+   * The Editing Toolbar plugin's bar above this note or canvas, when the ink tools are to sit in it (a
+   * setting): its top bar (the one that's always there), while it shows. PDFs, images, its other styles, or
+   * the plugin off: the ink tools keep their own bar.
    */
   private editingToolbarFor(view: FileView): HTMLElement | null {
-    if (!this.settings.inEditingToolbar || !(view instanceof MarkdownView) || !this.editingToolbarPlugin()) return null;
+    const kind = inkKindOf(view);
+    if (!this.settings.inEditingToolbar || (kind !== "markdown" && kind !== "canvas") || !this.editingToolbarPlugin()) return null;
     const bar = view.containerEl.querySelector<HTMLElement>('.editingToolbarModalBar[data-toolbar-style="top"]');
     // Its hidden marker can also reach a visible bar when another note hides its toolbar. Use the
     // rendered state, including visibility:hidden (which still has a layout rectangle).
@@ -1434,6 +1435,7 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
       // they move into the new one).
       if (host.firstElementChild !== el) host.prepend(el);
       host.addClass("oni-et-host");
+      host.toggleClass("oni-et-canvas", kind === "canvas");
       this.reserveInEditingToolbar(host, el);
       this.mergeEditingToolbarUndo();
     } else if (view && this.settings.showToolbar) {
@@ -1615,11 +1617,12 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
   private lastContentDebug = "";
 
   /**
-   * A PDF or image: ink in its own units (PDF points / image pixels) so it scales with zoom, a PDF's
-   * pages acting as its "lines" (see targets.ts) so ink stays on its page however the pages move.
+   * A PDF, image or canvas: ink in its own units (PDF points / image pixels / canvas px) so it scales with
+   * zoom, a PDF's pages or a canvas's cards acting as its "lines" (see targets.ts) so ink stays on its page
+   * or card however they move.
    */
   private syncContent(view: FileView, kind: InkKind, base: string | null, covered: boolean, inkOn: boolean) {
-    const layout = kind === "pdf" ? pdfLayout(view) : imageLayout(view);
+    const layout = kind === "pdf" ? pdfLayout(view) : kind === "canvas" ? canvasLayout(view) : imageLayout(view);
     const inkPath = base && view.file ? path.join(base, inkFileFor(view.file.path, kind)) : null;
     let msg: object = { type: "layout", visible: false };
     this.inkArea = null;
@@ -1646,7 +1649,7 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
       };
     }
     const host = inkOn && layout?.inkHost && inkPath && !covered ? layout.inkHost : null;
-    this.domInk.mount(host?.el ?? null, inkPath, host && layout ? { left: host.left, top: host.top, scale: layout.zoom, positioned: host.positioned } : undefined);
+    this.domInk.mount(host?.el ?? null, inkPath, host && layout ? { left: host.left, top: host.top, scale: host.scale ?? layout.zoom, positioned: host.positioned } : undefined);
     const key = JSON.stringify({ ...msg, title: undefined });
     if (key !== this.lastSent) {
       this.lastSent = key;
@@ -1655,15 +1658,17 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
     if (!layout || !inkPath) return;
 
     const tops = layout.tops.map((t) => Math.round(t * 100) / 100);
-    const linesKey = `page|${inkPath}|${tops.join(",")}`;
+    const cards = layout.cards;
+    const mode = cards ? "canvas" : "page";
+    const linesKey = `${mode}|${inkPath}|${tops.join(",")}|${layout.hashes.join(",")}|${cards ? [cards.lefts, cards.widths, cards.heights].join("|") : ""}`;
     if (linesKey !== this.lastLines) {
       this.lastLines = linesKey;
-      this.send({ type: "lines", inkPath, mode: "page", tops, hashes: layout.hashes, measuredFrom: 0, measuredTo: tops.length - 1 });
+      this.send({ type: "lines", inkPath, mode, tops, hashes: layout.hashes, measuredFrom: 0, measuredTo: tops.length - 1, ...cards });
     }
     const debug = `${kind}|${inkPath}`;
     if (debug !== this.lastContentDebug) {
       this.lastContentDebug = debug;
-      this.send({ type: "debug", message: `${kind}: ${view.file?.path}, ${tops.length} page(s), zoom ${layout.zoom.toFixed(3)} (from ${layout.source}), ink colours ${layout.dark ? "flipped for a dark page" : "as drawn"}` });
+      this.send({ type: "debug", message: `${kind}: ${view.file?.path}, ${tops.length} ${cards ? "card(s) and the board" : "page(s)"}, zoom ${layout.zoom.toFixed(3)} (from ${layout.source}), ink colours ${layout.dark ? "flipped for a dark page" : "as drawn"}` });
     }
   }
 
@@ -1895,7 +1900,7 @@ interface EditingToolbarCommand {
 
 const OVER_NOTE =".menu, .suggestion-container, .popover, .oni-popover, .tooltip, .notice-container, .prompt";
 /** Other plugins' floating bars inside a note (editing toolbar, floating table of contents, search...). */
-const FLOATING = "#editingToolbarModalBar, #editingToolbarPopoverBar, .editing-toolbar-ai-inline-prompt, .floating-toc-div, .document-search-container, .cm-panels, [class*='toolbar' i], [class*='floating' i]";
+const FLOATING = ".canvas-controls, .canvas-card-menu, .canvas-menu-container, .canvas-minimap, #editingToolbarModalBar, #editingToolbarPopoverBar, .editing-toolbar-ai-inline-prompt, .floating-toc-div, .document-search-container, .cm-panels, [class*='toolbar' i], [class*='floating' i]";
 
 /**
  * Where the ink layer must stay see-through, in viewport CSS px: Obsidian's menus and popovers, and

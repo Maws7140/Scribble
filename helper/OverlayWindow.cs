@@ -437,7 +437,7 @@ public sealed partial class OverlayWindow : Window
             _ when IsShapeTool => InkCanvasEditingMode.None,
             _ => gestures ? InkCanvasEditingMode.InkAndGesture : InkCanvasEditingMode.Ink,
         };
-        if (cmd.Tool != "lasso" && ink.GetSelectedStrokes().Count > 0) ink.Select(new StrokeCollection());
+        if (cmd.Tool != "lasso" && ink.GetSelectedStrokes().Count > 0) ClearSelection();
     }
 
     /// <summary>Scratch-out: scribbling over ink erases what it covers.</summary>
@@ -626,6 +626,7 @@ public sealed partial class OverlayWindow : Window
 
     /// <summary>How tall the page of ink should be, in ink units (see ApplyLines).</summary>
     double wantedHeight = 200_000;
+    double wantedWidth = 16_000;
     /// <summary>On-screen size (device px) the ink canvas mustn't exceed: see SizeInk.</summary>
     const double MaxCanvasPixels = 480_000;
 
@@ -640,7 +641,7 @@ public sealed partial class OverlayWindow : Window
         double perUnit = scale.ScaleX * VisualTreeHelper.GetDpi(this).DpiScaleX;
         if (!(perUnit > 0)) return;
         double height = Math.Min(wantedHeight, MaxCanvasPixels / perUnit);
-        double width = Math.Min(16_000, MaxCanvasPixels / perUnit);
+        double width = Math.Min(wantedWidth, MaxCanvasPixels / perUnit);
         if (Math.Abs(ink.Height - height) > 0.5) ink.Height = height;
         if (Math.Abs(ink.Width - width) > 0.5) ink.Width = width;
     }
@@ -810,7 +811,7 @@ public sealed partial class OverlayWindow : Window
         historyIndex = index;
         restoring = true;
         StopReplay();
-        ink.Select(new StrokeCollection());
+        ClearSelection();
         ink.Strokes = Unpack(history[index]);
         HookStrokes();
         Reanchor(); // the snapshot may be from a different layout

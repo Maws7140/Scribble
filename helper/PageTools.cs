@@ -68,7 +68,7 @@ public sealed partial class OverlayWindow
         if (IsShapeTool && ink.EditingMode == InkCanvasEditingMode.Select)
         {
             if (ink.GetSelectedStrokes().Count > 0 && ink.HitTestSelection(e.GetPosition(ink)) != InkCanvasSelectionHitResult.None) return;
-            ink.Select(new StrokeCollection());
+            ClearSelection();
             ink.EditingMode = InkCanvasEditingMode.None;
         }
         dragging = true;
@@ -181,7 +181,7 @@ public sealed partial class OverlayWindow
     /// </summary>
     internal void InsertSpace(double fromY, double toY)
     {
-        if (tops == null || tops.Length == 0 || topsMode == "page") return;
+        if (tops == null || tops.Length == 0 || topsMode is "page" or "canvas") return;
         double pitch = Pitch();
         int count = (int)Math.Round((toY - fromY) / pitch);
         if (count == 0) return;
@@ -250,7 +250,7 @@ public sealed partial class OverlayWindow
         if (strokes.Count == 0) return;
         ink.Strokes.Add(strokes);
         // All parts of the shape move with one line of text.
-        if (tops != null) { var bounds = strokes.GetBounds(); int line = LineAt(bounds.Top + bounds.Height / 2); foreach (var s in strokes) SetAnchor(s, line, tops[line]); }
+        if (tops != null) { int line = LineFor(strokes.GetBounds()); foreach (var s in strokes) SetAnchor(s, line, tops[line]); }
         // Selected, with handles, to adjust its size and place.
         ink.Select(strokes);
         Protocol.Log($"shape: {kind}");

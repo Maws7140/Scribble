@@ -194,7 +194,7 @@ public sealed partial class OverlayWindow
         importing = true;
         try
         {
-            ink.Select(new StrokeCollection());
+            ClearSelection();
             ink.Strokes.Clear();
             ink.Strokes.Add(pulled);
         }

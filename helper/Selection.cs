@@ -65,7 +65,7 @@ public sealed partial class OverlayWindow
             {
                 modeBeforeLasso = ink.EditingMode;
                 sideLasso = true;
-                ink.Select(new StrokeCollection());
+                ClearSelection();
                 ink.EditingMode = InkCanvasEditingMode.Select;
             }
             else if (sideLasso && !side)
@@ -101,12 +101,24 @@ public sealed partial class OverlayWindow
     static bool SideButton(StylusDevice device) =>
         device.StylusButtons.Any(b => b.Guid == StylusPointProperties.BarrelButton.Id && b.StylusButtonState == StylusButtonState.Down);
 
+    /// <summary>
+    /// Let go of the selection, leaving the tool as it is. InkCanvas.Select switches the pen to selecting even
+    /// when it's given nothing to select, so an undo, Esc or erasing the page left the pen stuck lassoing.
+    /// </summary>
+    void ClearSelection()
+    {
+        if (ink.GetSelectedStrokes().Count == 0) return;
+        var mode = ink.EditingMode;
+        ink.Select(new StrokeCollection());
+        ink.EditingMode = mode;
+    }
+
     /// <summary>Back to the tool the side button interrupted (the selection is let go).</summary>
     void EndSideLasso()
     {
         if (!sideLasso) return;
         sideLasso = false;
-        ink.Select(new StrokeCollection());
+        ClearSelection();
         ink.EditingMode = modeBeforeLasso;
     }
 
@@ -258,7 +270,7 @@ public sealed partial class OverlayWindow
         switch (cmd.Type)
         {
             case "deselect":
-                ink.Select(new StrokeCollection());
+                ClearSelection();
                 EndSideLasso();
                 break;
             case "cut":
@@ -271,7 +283,7 @@ public sealed partial class OverlayWindow
                 if (selected.Count == 0) return;
                 var copy = new StrokeCollection(selected.Select(s => s.Clone()));
                 foreach (var s in copy)
-                    foreach (var id in new[] { AnchorLineId, AnchorTopId, AnchorModelId, AboveHashId, AboveOffsetId, BelowHashId, BelowOffsetId, StrokeTimeId })
+                    foreach (var id in new[] { AnchorLineId, AnchorTopId, AnchorModelId, AnchorLeftId, AboveHashId, AboveOffsetId, BelowHashId, BelowOffsetId, StrokeTimeId })
                         if (s.ContainsPropertyData(id)) s.RemovePropertyData(id);
                 copy.Transform(new Matrix(1, 0, 0, 1, 16 / Zoom, 16 / Zoom), false);
                 ink.Strokes.Add(copy);
@@ -299,12 +311,18 @@ public sealed partial class OverlayWindow
                 break;
             }
             case "select-all":
-                if (ink.EditingMode != InkCanvasEditingMode.Select) ink.EditingMode = InkCanvasEditingMode.Select;
+                // Like the side button: letting go of the selection goes back to the tool you had.
+                if (ink.EditingMode != InkCanvasEditingMode.Select)
+                {
+                    modeBeforeLasso = ink.EditingMode;
+                    sideLasso = true;
+                    ink.EditingMode = InkCanvasEditingMode.Select;
+                }
                 ink.Select(ink.Strokes);
                 break;
             case "clear-ink":
                 // One undo step brings it all back.
-                ink.Select(new StrokeCollection());
+                ClearSelection();
                 if (ink.Strokes.Count > 0) ink.Strokes.Clear();
                 break;
             case "copy-image":

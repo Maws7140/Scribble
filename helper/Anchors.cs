@@ -19,6 +19,9 @@ namespace InkOverlay;
 /// which gives its line in the note as it is now, then the stroke moves by (that line's top − stored top).
 /// So the file is always self-consistent whichever mode last saved it, and no edit history is needed.
 /// Strokes written together (a word, a drawing) share one anchor so they move as a unit.
+///
+/// On a canvas the "lines" are the board (line 0, which never moves) and the cards, which move both ways, so
+/// an anchor also keeps its card's left, and its reference is the card itself (see FollowCards).
 /// </summary>
 public sealed partial class OverlayWindow
 {
@@ -33,12 +36,15 @@ public sealed partial class OverlayWindow
     /// they all had the block's top: re-anchored once, in Live Preview (see MigrateBlockAnchors).
     /// </summary>
     internal static readonly Guid AnchorModelId = new("3b1d6f0e-8a2c-4f5b-9e71-2c4d5a6b7c94");
+    /// <summary>On a canvas: the left of the card the stroke is anchored to.</summary>
+    internal static readonly Guid AnchorLeftId = new("3b1d6f0e-8a2c-4f5b-9e71-2c4d5a6b7c95");
 
     const double GroupMs = 1500;    // strokes this soon after the last one, and...
     const double GroupGap = 40;     // ...this close to it, belong to the same word/drawing
 
     double[]? tops;
     double[]? blockTops;            // Live Preview: lines at their block's top, as anchors before model 2 had them
+    double[]? lefts, widths, heights; // a canvas: with `tops`, the rectangle of the board (0) and each card
     int[]? hashes;                 // per line: fingerprint of its text, 0 = blank / frontmatter
     readonly Dictionary<int, int> hashCount = new();
     string? topsMode;
@@ -48,6 +54,8 @@ public sealed partial class OverlayWindow
     bool importing;                 // ink being replaced wholesale (pull from OneNote): anchored as a batch
     Stroke? lastStroke;
     DateTime lastStrokeAt;
+
+    bool OnCanvas => lefts != null;
 
     internal StrokeCollection Strokes => ink.Strokes;
     internal System.Windows.Controls.InkCanvas Canvas => ink;
@@ -71,6 +79,14 @@ public sealed partial class OverlayWindow
         s.AddPropertyData(AnchorTopId, top);
         if (markModel) s.AddPropertyData(AnchorModelId, 2);
         if (hashes == null || line < 0 || line >= hashes.Length) return;
+        if (OnCanvas)
+        {
+            // Its reference is the card itself; there's no text around it to fall back on.
+            s.AddPropertyData(AnchorLeftId, lefts![line]);
+            SetRef(s, AboveHashId, AboveOffsetId, line, line);
+            SetRef(s, BelowHashId, BelowOffsetId, -1, line);
+            return;
+        }
         SetRef(s, AboveHashId, AboveOffsetId, FindRef(line, -1), line);
         SetRef(s, BelowHashId, BelowOffsetId, FindRef(line + 1, +1), line);
     }
@@ -152,6 +168,10 @@ public sealed partial class OverlayWindow
             Protocol.Log($"lines: {cmd.Mode}, {cmd.Tops!.Length} lines, measured {cmd.MeasuredFrom}-{cmd.MeasuredTo}");
         tops = cmd.Tops;
         blockTops = cmd.Mode == "source" && cmd.BlockTops?.Length == cmd.Tops!.Length ? cmd.BlockTops : null;
+        bool canvas = cmd.Mode == "canvas" && cmd.Lefts?.Length == cmd.Tops!.Length && cmd.Widths?.Length == cmd.Tops.Length && cmd.Heights?.Length == cmd.Tops.Length;
+        lefts = canvas ? cmd.Lefts : null;
+        widths = canvas ? cmd.Widths : null;
+        heights = canvas ? cmd.Heights : null;
         hashes = cmd.Hashes != null && cmd.Hashes.Length == cmd.Tops!.Length ? cmd.Hashes : null;
         hashCount.Clear();
         if (hashes != null) foreach (var h in hashes) if (h != 0) hashCount[h] = hashCount.GetValueOrDefault(h) + 1;
@@ -159,7 +179,9 @@ public sealed partial class OverlayWindow
         measured = (cmd.MeasuredFrom ?? 0, cmd.MeasuredTo ?? int.MaxValue);
         // Room to draw down to the last line (a note), or to the end of the last page (a PDF: its pages are all
         // there is; see SizeInk for why it shouldn't be bigger than needed).
-        if (tops!.Length > 0) wantedHeight = topsMode == "page" ? tops[^1] + 2_000 : Math.Max(200_000, tops[^1] + 20_000);
+        // A canvas goes every way: the plugin says how big.
+        if (canvas && cmd.Extent is double extent && extent > 0) wantedWidth = wantedHeight = extent;
+        else if (tops!.Length > 0) wantedHeight = topsMode == "page" ? tops[^1] + 2_000 : Math.Max(200_000, tops[^1] + 20_000);
         SizeInk();
         Reanchor();
     }
@@ -171,7 +193,7 @@ public sealed partial class OverlayWindow
     /// </summary>
     bool LooksLikeThisNote(Command cmd)
     {
-        if (cmd.Hashes == null || cmd.Hashes.Length != cmd.Tops!.Length) return true;
+        if (cmd.Mode == "canvas" || cmd.Hashes == null || cmd.Hashes.Length != cmd.Tops!.Length) return true;
         var refs = new HashSet<int>();
         foreach (var s in ink.Strokes)
             foreach (var id in new[] { AboveHashId, BelowHashId })
@@ -188,12 +210,14 @@ public sealed partial class OverlayWindow
     {
         tops = null;
         blockTops = null;
+        lefts = widths = heights = null;
         hashes = null;
         hashCount.Clear();
         topsMode = null;
         unanchoredNew.Clear();
         lastStroke = null;
         wantedHeight = 200_000;
+        wantedWidth = 16_000;
         SizeInk();
         if (pendingLines is { } p && p.InkPath == inkPath)
         {
@@ -217,8 +241,10 @@ public sealed partial class OverlayWindow
         if (topsMode != "preview") AnchorLegacy(ink.Strokes.Where(s => !TryGetAnchor(s, out _, out _)).ToList());
         if (blockTops != null && MigrateBlockAnchors()) moved = true;
 
+        if (OnCanvas && FollowCards()) moved = true;
+
         int skipped = 0;
-        foreach (var s in ink.Strokes)
+        if (!OnCanvas) foreach (var s in ink.Strokes)
         {
             if (!TryGetAnchor(s, out var line, out var refTop)) continue;
             // Placed by MigrateBlockAnchors already (and still on the older anchor, off screen).
@@ -246,6 +272,39 @@ public sealed partial class OverlayWindow
             saveDebounce.Start();
             SendExtent();
         }
+    }
+
+    /// <summary>
+    /// A canvas: ink on a card goes where the card went. A card that isn't there (deleted, or the canvas is
+    /// still loading) leaves its ink where it is, still anchored to it, so undoing the delete brings the two
+    /// back together. True if any ink moved or was anchored afresh.
+    /// </summary>
+    bool FollowCards()
+    {
+        if (hashes == null) return false;
+        bool changed = false;
+        foreach (var s in ink.Strokes)
+        {
+            if (!TryGetAnchor(s, out var line, out var refTop)) continue;
+            if (!s.ContainsPropertyData(AboveHashId) || !s.ContainsPropertyData(AnchorLeftId))
+            {
+                int at = LineFor(s.GetBounds());
+                SetAnchor(s, at, tops![at]);
+                changed = true;
+                continue;
+            }
+            int card = Array.IndexOf(hashes, Convert.ToInt32(s.GetPropertyData(AboveHashId)));
+            if (card < 0) continue;
+            double dx = lefts![card] - Convert.ToDouble(s.GetPropertyData(AnchorLeftId)), dy = tops![card] - refTop;
+            bool shift = Math.Abs(dx) >= 0.25 || Math.Abs(dy) >= 0.25;
+            if (shift)
+            {
+                s.Transform(new Matrix(1, 0, 0, 1, dx, dy), false);
+                changed = true;
+            }
+            if (shift || card != line) SetAnchor(s, card, tops[card]);
+        }
+        return changed;
     }
 
     /// <summary>
@@ -310,8 +369,8 @@ public sealed partial class OverlayWindow
                 return;
             }
         }
-        // Otherwise: the line under the stroke's middle.
-        int line = LineAt(b.Top + b.Height / 2);
+        // Otherwise: the line (or card) under the stroke's middle.
+        int line = LineFor(b);
         SetAnchor(s, line, tops[line]);
     }
 
@@ -326,7 +385,7 @@ public sealed partial class OverlayWindow
         int anchored = 0;
         foreach (var (cluster, b) in Clusters(strokes))
         {
-            int line = LineAt(b.Top + b.Height / 2);
+            int line = LineFor(b);
             // Only against measured lines: an estimated position would make the ink jump once it's measured.
             // Clusters further away get anchored when scrolled near.
             if (line < measured.from || line > measured.to) continue;
@@ -410,9 +469,19 @@ public sealed partial class OverlayWindow
         if (tops == null) return;
         var sel = ink.GetSelectedStrokes();
         if (sel.Count == 0) return;
-        var b = sel.GetBounds();
-        int line = LineAt(b.Top + b.Height / 2);
+        int line = LineFor(sel.GetBounds());
         foreach (var s in sel) SetAnchor(s, line, tops[line]);
+    }
+
+    /// <summary>What ink in this box belongs to: the line under its middle, or on a canvas the card under it.</summary>
+    int LineFor(Rect b)
+    {
+        double x = b.Left + b.Width / 2, y = b.Top + b.Height / 2;
+        if (!OnCanvas) return LineAt(y);
+        // Cards come bottom first: the one on top wins. Not on a card: the board.
+        for (int i = tops!.Length - 1; i > 0; i--)
+            if (x >= lefts![i] && x <= lefts[i] + widths![i] && y >= tops[i] && y <= tops[i] + heights![i]) return i;
+        return 0;
     }
 
     int LineAt(double y)

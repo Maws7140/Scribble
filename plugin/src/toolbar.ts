@@ -18,8 +18,8 @@ export interface ToolbarHost {
   layerOn(): boolean;
   openInOneNote(): void;
   pullFromOneNote(): void;
-  /** What the toolbar is on: notes get rule lines and OneNote; PDFs and images don't. */
-  inkKind(): "markdown" | "pdf" | "image" | null;
+  /** What the toolbar is on: notes get rule lines and OneNote; PDFs, images and canvases don't. */
+  inkKind(): "markdown" | "pdf" | "image" | "canvas" | null;
 }
 
 /** Logarithmic slider mapping: fine control at small thicknesses, like a real pen range. */

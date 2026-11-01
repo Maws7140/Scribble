@@ -1,13 +1,14 @@
 import { FileView, MarkdownView, View } from "obsidian";
+import { isDarkTheme } from "./settings";
 
-/** What the ink layer can sit on: a note, a PDF in Obsidian's PDF viewer, or an image in its image view. */
-export type InkKind = "markdown" | "pdf" | "image";
+/** What the ink layer can sit on: a note, a PDF in Obsidian's PDF viewer, an image in its image view, or a canvas. */
+export type InkKind = "markdown" | "pdf" | "image" | "canvas";
 
 export function inkKindOf(view: View | null | undefined): InkKind | null {
   if (!view) return null;
   if (view instanceof MarkdownView) return "markdown";
   const type = view.getViewType();
-  if (type === "pdf" || type === "image") return type;
+  if (type === "pdf" || type === "image" || type === "canvas") return type;
   return null;
 }
 
@@ -24,7 +25,7 @@ export interface ContentLayout {
    * and the content's top-left inside it (CSS px). `positioned`: the element is already a containing block
    * (leave its CSS alone).
    */
-  inkHost?: { el: HTMLElement; left: number; top: number; positioned: boolean };
+  inkHost?: { el: HTMLElement; left: number; top: number; positioned: boolean; scale?: number };
   ox: number;
   oy: number;
   zoom: number;
@@ -32,6 +33,8 @@ export interface ContentLayout {
   hashes: number[];
   source: string;
   dark: boolean;
+  /** A canvas: each "line" is a card (see canvasLayout). */
+  cards?: { lefts: number[]; widths: number[]; heights: number[]; extent: number };
 }
 
 const fnv = (s: string) => {
@@ -85,6 +88,52 @@ export function imageLayout(view: FileView): ContentLayout | null {
   const box = img.parentElement;
   const inkHost = box ? (() => { const b = box.getBoundingClientRect(); return { el: box, left: r.left - b.left - box.clientLeft, top: r.top - b.top - box.clientTop, positioned: false }; })() : undefined;
   return { area, inkHost, ox: r.left - area.left, oy: r.top - area.top, zoom: r.width / img.naturalWidth, tops: [0], hashes: [1], source: "image", dark: false };
+}
+
+/**
+ * Ink units on a canvas are canvas px plus this. Canvas positions go negative but the ink layer starts at 0,
+ * so 0,0 on the canvas is here, in the middle of an ink layer CANVAS_EXTENT square.
+ */
+export const CANVAS_ORIGIN = 50_000;
+const CANVAS_EXTENT = CANVAS_ORIGIN * 2;
+
+// Obsidian's Canvas (internal; only for the cards: where they are and which is on top).
+interface CanvasCard { id: string; x: number; y: number; width: number; height: number; renderedZIndex?: number; nodeEl?: HTMLElement }
+
+/**
+ * A canvas laid out for ink. Position and zoom come from the layer Canvas draws its cards in, so they're
+ * what's on screen, and the in-page copy of the ink goes inside that layer, where Canvas's own pan and zoom
+ * carry it. The "lines" are the board (line 0, which never moves) and each card, in stacking order (bottom
+ * first), so ink on a card follows it (see Anchors.cs). Cards are found again by a fingerprint of their ID.
+ */
+export function canvasLayout(view: FileView): ContentLayout | null {
+  const layer = view.contentEl.querySelector(".canvas-wrapper .canvas");
+  if (!(layer instanceof HTMLElement) || !layer.offsetWidth) return null;
+  const r = layer.getBoundingClientRect();
+  const zoom = r.width / layer.offsetWidth;
+  if (!(zoom > 0) || !isFinite(zoom)) return null;
+  const area = view.contentEl.getBoundingClientRect();
+  const nodes = (view as unknown as { canvas?: { nodes?: Map<string, CanvasCard> } }).canvas?.nodes;
+  const isGroup = (c: CanvasCard) => c.nodeEl?.hasClass("canvas-node-group") ?? false;
+  const cards = (nodes instanceof Map ? Array.from(nodes.values()) : [])
+    .sort((a, b) => Number(isGroup(b)) - Number(isGroup(a)) || (a.renderedZIndex ?? 0) - (b.renderedZIndex ?? 0));
+  return {
+    area,
+    inkHost: { el: layer, left: -CANVAS_ORIGIN, top: -CANVAS_ORIGIN, positioned: true, scale: 1 },
+    ox: r.left - area.left - CANVAS_ORIGIN * zoom,
+    oy: r.top - area.top - CANVAS_ORIGIN * zoom,
+    zoom,
+    tops: [0, ...cards.map((c) => c.y + CANVAS_ORIGIN)],
+    hashes: [fnv("canvas board"), ...cards.map((c) => fnv(c.id))],
+    cards: {
+      lefts: [0, ...cards.map((c) => c.x + CANVAS_ORIGIN)],
+      widths: [0, ...cards.map((c) => c.width)],
+      heights: [0, ...cards.map((c) => c.height)],
+      extent: CANVAS_EXTENT,
+    },
+    source: "canvas",
+    dark: isDarkTheme(),
+  };
 }
 
 function isDarkColor(css: string): boolean {
