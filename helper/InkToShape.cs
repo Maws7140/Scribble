@@ -19,7 +19,10 @@ namespace InkOverlay;
 public sealed partial class OverlayWindow
 {
     static readonly TimeSpan HoldTime = TimeSpan.FromMilliseconds(600);
-    const double HoldSlop = 4; // px the pen may wobble and still count as held
+    const double HoldSlop = 4; // on-screen px the pen may wobble and still count as held
+    // Once a shape is up, it has to be moved away from on purpose: a pen tip wanders further than HoldSlop as
+    // it lifts, which took the shape away just as it was being accepted.
+    const double PreviewSlop = 24;
     // A stroke drawn within this long after the previous one can pair with it (an arrow's shaft and head).
     static readonly TimeSpan PairWindow = TimeSpan.FromSeconds(3);
 
@@ -70,7 +73,8 @@ public sealed partial class OverlayWindow
         {
             var p = new Point(sp.X, sp.Y);
             livePoints.Add(p);
-            if (livePoints.Count == 1 || (p - holdAnchor).Length > HoldSlop)
+            double slop = (pendingShape != null ? PreviewSlop : HoldSlop) / Zoom;
+            if (livePoints.Count == 1 || (p - holdAnchor).Length > slop)
             {
                 // Moving: (re)start the hold clock, and drop any shape from an earlier pause.
                 holdAnchor = p;
