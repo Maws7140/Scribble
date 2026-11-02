@@ -27,7 +27,7 @@ public sealed partial class OverlayWindow : Window
     // Tall enough for any note; the page itself grows to fit the ink (see SendExtent).
     // (1,000,000 px ran WPF's renderer out of memory on a window resize; 200,000 is ~80 screens of page.)
     // Wide enough for big images (ink in image pixels); taller for long PDFs when their pages arrive (ApplyLines).
-    readonly InkCanvas ink = new() { Background = Brushes.Transparent, Width = 16_000, Height = 200_000 };
+    readonly PenCanvas ink = new() { Background = Brushes.Transparent, Width = 16_000, Height = 200_000 };
     readonly ScaleTransform scale = new(1, 1);
     readonly TranslateTransform translate = new();
     readonly DispatcherTimer tracker;
@@ -443,6 +443,12 @@ public sealed partial class OverlayWindow : Window
     /// <summary>Scratch-out: scribbling over ink erases what it covers.</summary>
     void OnGesture(object sender, InkCanvasGestureEventArgs e)
     {
+        // Turning a shape back and forth isn't a scribble.
+        if (shapePreview != null)
+        {
+            e.Cancel = true;
+            return;
+        }
         if (editorPen)
         {
             if (!EditorGesture(e)) e.Cancel = true;
