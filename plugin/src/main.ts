@@ -15,7 +15,7 @@ import { EditorView, ViewUpdate } from "@codemirror/view";
 import { EditGesture, applyEditGesture } from "./editgesture";
 import { DomInk, DomUpdate } from "./domink";
 import { lineShifts } from "./lineshift";
-import { MergedHistory } from "./undo";
+import { MergedHistory, PageHistory } from "./undo";
 import { ImportCard, OneNotePage, PagePicker, freeCanvasPath, writeCanvas } from "./onenotecanvas";
 import { InkPrint, PrintReference, PrintStroke } from "./print";
 
@@ -54,6 +54,8 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
   private domInk = new DomInk();
   /** One undo for ink and text, for Editing Toolbar's undo and redo when the ink tools are in its bar. */
   private merged = new MergedHistory((command) => this.command(command));
+  private watchedCanvas: CanvasWithHistory | null = null;
+  private mergedCanvases = new WeakSet<CanvasWithHistory>();
   private printing = new InkPrint(this);
   private printId = 0;
   private printRequests = new Map<number, { resolve: (snapshot: string | null) => void; reject: (error: Error) => void }>();
@@ -609,6 +611,7 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
       case "history":
         this.toolbar.setHistory(!!msg.canUndo, !!msg.canRedo);
         this.merged.onInk(msg.steps ?? 0, !!msg.added, !!msg.reset, !!msg.canUndo, !!msg.canRedo);
+        this.watchedCanvas?.updateHistoryUI();
         break;
       case "capabilities":
         this.scratchOutAvailable = !!msg.scratchOut;
@@ -1485,7 +1488,10 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
       const own = cmd.callback;
       cmd.oniOwn = own;
       cmd.callback = () => {
-        if (this.toolbar.el.hasClass("oni-in-et") && this.merged.step(direction)) return;
+        if (this.toolbar.el.hasClass("oni-in-et")) {
+          if (this.watchedCanvas) return this.watchedCanvas[direction]();
+          if (this.merged.step(direction)) return;
+        }
         return own.call(cmd);
       };
       this.register(() => {
@@ -1494,6 +1500,39 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
         delete cmd.oniOwn;
       });
     }
+  }
+
+  /**
+   * One undo on a canvas: its own button and Ctrl+Z take back the last change, a stroke or a card (see
+   * MergedHistory). Its undo, redo and history are this canvas's own; deleting them goes back to Obsidian's.
+   */
+  private mergeCanvasUndo(canvas: CanvasWithHistory) {
+    if (this.mergedCanvases.has(canvas)) return;
+    this.mergedCanvases.add(canvas);
+    const proto = Object.getPrototypeOf(canvas) as CanvasWithHistory;
+    const push = canvas.history.push;
+    for (const direction of ["undo", "redo"] as const) {
+      canvas[direction] = () => {
+        if (this.merged.watching(canvas.history) && this.merged.step(direction)) return;
+        const could = direction === "undo" ? canvas.history.canUndo() : canvas.history.canRedo();
+        proto[direction].call(canvas);
+        if (could && this.merged.watching(canvas.history)) this.merged.onPageMoved(direction);
+      };
+    }
+    canvas.history.push = (data: unknown) => {
+      push.call(canvas.history, data);
+      if (this.merged.watching(canvas.history)) this.merged.onPageStep();
+    };
+    canvas.updateHistoryUI = () => {
+      proto.updateHistoryUI.call(canvas);
+      if (!this.merged.watching(canvas.history)) return;
+      canvas.undoBtnEl?.toggleClass("is-disabled", !this.merged.can("undo"));
+      canvas.redoBtnEl?.toggleClass("is-disabled", !this.merged.can("redo"));
+    };
+    this.register(() => {
+      for (const own of ["undo", "redo", "updateHistoryUI"] as const) delete (canvas as Partial<CanvasWithHistory>)[own];
+      canvas.history.push = push;
+    });
   }
 
   private mountToolbar(view: FileView | null) {
@@ -1540,7 +1579,9 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
     let inkOn = this.enabled && !ignored.ink && (!target || this.showsItsFile(target.view));
     this.mountToolbar(ignored.toolbar ? null : target?.view ?? null);
     const note = target?.view instanceof MarkdownView ? target.view : null;
-    this.merged.watch((note?.editor as unknown as { cm?: EditorView } | undefined)?.cm ?? null, note?.file?.path ?? "");
+    this.watchedCanvas = target?.kind === "canvas" ? (target.view as unknown as { canvas?: CanvasWithHistory }).canvas ?? null : null;
+    if (this.watchedCanvas) this.mergeCanvasUndo(this.watchedCanvas);
+    this.merged.watch((note?.editor as unknown as { cm?: EditorView } | undefined)?.cm ?? null, target?.view.file?.path ?? "", this.watchedCanvas?.history ?? null);
 
     // A dialog covers the whole note: the ink steps aside. Menus, popovers and floating toolbars only
     // cover part of it: those get a see-through hole in the ink layer instead (see uiHoles).
@@ -1975,6 +2016,16 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
 interface EditingToolbarPlugin {
   Leaf_Width: number;
   handleeditingToolbar_resize(): unknown;
+}
+
+/** What's used of Obsidian's Canvas (internal). */
+interface CanvasWithHistory {
+  history: PageHistory & { push(data: unknown): void };
+  undo(): void;
+  redo(): void;
+  updateHistoryUI(): void;
+  undoBtnEl?: HTMLElement;
+  redoBtnEl?: HTMLElement;
 }
 
 /** One of Editing Toolbar's commands (undo, redo); `oniOwn` is its own callback while ours stands in. */

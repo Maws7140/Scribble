@@ -61,10 +61,11 @@
 .oni-et-slot {
   display: none !important;
 }
-/* On a canvas it won't re-fit its buttons (it only does for notes): what doesn't fit is cut off at the
-   right, past the ink tools, with its dropdowns still free to open downwards. */
+/* On a canvas it won't re-fit its buttons (it only does for notes), so what doesn't fit goes on another
+   row rather than out of reach. */
 .oni-et-host.oni-et-canvas {
-  overflow-x: clip;
+  flex-wrap: wrap;
+  height: auto;
 }
 /* Its own undo and redo do ink and text both there (see MergedHistory). */
 .oni-toolbar.oni-in-et .oni-history {

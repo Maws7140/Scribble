@@ -3,11 +3,18 @@ import type { EditorView, ViewUpdate } from "@codemirror/view";
 
 type Step = "ink" | "text";
 
+/** What's needed of Canvas's own history (internal to Obsidian). */
+export interface PageHistory {
+  canUndo(): boolean;
+  canRedo(): boolean;
+}
+
 /**
  * One undo and redo for a note's ink and its text, in the order things were done (like OneNote): with the
  * ink tools in Editing Toolbar's bar, its undo button takes back the last change, a stroke or some typing.
  * The note's editor keeps the text history and the ink helper the ink history; this only keeps which came
  * when, and moves along with either when they're undone some other way (Ctrl+Z, the Undo ink command).
+ * A canvas works the same way, its own history (cards moved, added, removed) standing in for the text.
  */
 export class MergedHistory {
   private undos: Step[] = [];
@@ -19,16 +26,18 @@ export class MergedHistory {
   /** The move in the ink history our own undo or redo is waiting on. */
   private expectInk = 0;
   private editor: EditorView | null = null;
+  private page: PageHistory | null = null;
   private file = "";
   private textUndo = 0;
   private textRedo = 0;
 
   constructor(private sendInk: (command: "undo" | "redo") => void) {}
 
-  /** The note on screen and its editor; another note starts afresh (a pane keeps its editor between notes). */
-  watch(editor: EditorView | null, file: string) {
-    if (editor === this.editor && file === this.file) return;
+  /** The note on screen and its editor (or a canvas and its history); another starts afresh (a pane keeps its editor between notes). */
+  watch(editor: EditorView | null, file: string, page: PageHistory | null = null) {
+    if (editor === this.editor && file === this.file && page === this.page) return;
     this.editor = editor;
+    this.page = page;
     this.file = file;
     this.undos = [];
     this.redos = [];
@@ -75,6 +84,32 @@ export class MergedHistory {
     }
   }
 
+  /** The canvas on screen recorded a step of its own. */
+  onPageStep() {
+    this.undos.push("text");
+    this.redos = [];
+  }
+
+  /** Canvas's own history moved, by its own undo or redo. */
+  onPageMoved(direction: "undo" | "redo") {
+    if (direction === "undo") move(this.undos, this.redos, "text", 1);
+    else move(this.redos, this.undos, "text", 1);
+  }
+
+  watching(page: PageHistory) {
+    return this.page === page;
+  }
+
+  private pageCan(direction: "undo" | "redo") {
+    if (this.page) return direction === "undo" ? this.page.canUndo() : this.page.canRedo();
+    return (direction === "undo" ? this.textUndo : this.textRedo) > 0;
+  }
+
+  /** Is there anything to undo (or redo), of either kind? */
+  can(direction: "undo" | "redo") {
+    return (direction === "undo" ? this.canUndoInk : this.canRedoInk) || this.pageCan(direction);
+  }
+
   /**
    * Undo (or redo) the last step. True: it was ink, and that's done. False: it's text, or there's nothing
    * here, so the editor's own undo should run (its change comes back through onText).
@@ -87,7 +122,7 @@ export class MergedHistory {
       const last = from[from.length - 1];
       const possible = last === "ink"
         ? (direction === "undo" ? this.canUndoInk : this.canRedoInk)
-        : (direction === "undo" ? this.textUndo : this.textRedo) > 0;
+        : this.pageCan(direction);
       if (possible) break;
       from.pop();
     }
