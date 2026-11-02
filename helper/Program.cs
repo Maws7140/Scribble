@@ -53,6 +53,7 @@ public sealed class Command
 
     // "lines": where each source line sits (CSS px from the text column top), in the given mode.
     public string? Mode { get; set; }            // source | preview
+    public int? Seq { get; set; }                // a note's: which positions these are (see PublishInk)
     public double[]? Tops { get; set; }
     // A canvas ("canvas" mode): each "line" is the board or a card; these and Tops are its rectangle.
     public double[]? Lefts { get; set; }

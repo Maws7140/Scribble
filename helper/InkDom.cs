@@ -135,7 +135,9 @@ public sealed partial class OverlayWindow
     }
     /// <summary>
     /// The note's copy brought up to date: the strokes in drawing order (by id), with the outline (as Windows
-    /// Ink draws it), colour and opacity of only those that are new or changed since the last time.
+    /// Ink draws it), colour and opacity of only those that are new or changed since the last time. It also says
+    /// which line positions this is laid out for and each stroke's line: the plugin moves the strokes with their
+    /// lines straight away, ahead of the next of these.
     /// </summary>
     void PublishInk()
     {
@@ -143,11 +145,13 @@ public sealed partial class OverlayWindow
         bool reset = domReset;
         domReset = false;
         var order = new System.Collections.Generic.List<int>(ink.Strokes.Count);
+        var lines = new System.Collections.Generic.List<int>(ink.Strokes.Count);
         var add = new System.Collections.Generic.List<object>();
         foreach (var s in ink.Strokes)
         {
             var id = IdOf(s);
             order.Add(id.Id);
+            lines.Add(TryGetAnchor(s, out var line, out _) ? line : -1);
             if (id.Sent && !reset) continue;
             id.Sent = true;
             var da = s.DrawingAttributes;
@@ -170,7 +174,7 @@ public sealed partial class OverlayWindow
                 hl = da.IsHighlighter,
             });
         }
-        Protocol.Send(new { type = "ink-svg", path = inkPath, reset, order, add });
+        Protocol.Send(new { type = "ink-svg", path = inkPath, reset, order, add, seq = linesSeq, lines });
     }
 
     static string N(double v) => Math.Round(v, 2).ToString("0.##", CultureInfo.InvariantCulture);

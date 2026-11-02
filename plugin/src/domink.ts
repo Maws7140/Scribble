@@ -29,17 +29,29 @@ export interface DomUpdate {
   order?: number[];
   /** New or changed strokes. */
   add?: DomStroke[];
+  /** The line positions this drawing is laid out for (see moveLines); a note's only, 0 otherwise. */
+  seq?: number;
+  /** The line each stroke in `order` belongs to; -1 for none. */
+  lines?: number[];
 }
 
 const SVG = "http://www.w3.org/2000/svg";
 
-interface Entry { el: SVGPathElement | SVGImageElement; hl: boolean }
+interface Entry { el: SVGPathElement | SVGImageElement; hl: boolean; line: number; moved: number }
+interface Lines { tops: number[]; hashes: number[] }
+
+/** Line positions kept while the helper catches up (it's rarely more than a few behind). */
+const MAX_LINES = 64;
 
 export class DomInk {
   private svg: SVGSVGElement;
   private path = "";
   private nativeShown = true;
   private strokes = new Map<number, Entry>();
+  private linesPath = "";
+  private sentLines = new Map<number, Lines>();
+  private latest: Lines | null = null;
+  private drawnFor = 0;
 
   constructor() {
     this.svg = document.createElementNS(SVG, "svg");
@@ -57,7 +69,7 @@ export class DomInk {
       const kind = s.img ? "image" : "path";
       let entry = this.strokes.get(s.id);
       if (!entry || entry.el.tagName !== kind) {
-        entry = { el: document.createElementNS(SVG, kind) as SVGPathElement | SVGImageElement, hl: s.hl };
+        entry = { el: document.createElementNS(SVG, kind) as SVGPathElement | SVGImageElement, hl: s.hl, line: -1, moved: 0 };
         this.strokes.set(s.id, entry);
       }
       entry.hl = s.hl;
@@ -82,6 +94,49 @@ export class DomInk {
     const listed = order.map((id) => this.strokes.get(id)).filter((e): e is Entry => !!e);
     // Highlighters under the pen ink, each group in drawing order.
     this.svg.replaceChildren(...listed.filter((e) => e.hl).map((e) => e.el), ...listed.filter((e) => !e.hl).map((e) => e.el));
+    order.forEach((id, i) => {
+      const entry = this.strokes.get(id);
+      if (entry) entry.line = u.lines?.[i] ?? -1;
+    });
+    this.drawnFor = u.seq ?? 0;
+    for (const seq of [...this.sentLines.keys()]) if (seq < this.drawnFor) this.sentLines.delete(seq);
+    this.follow();
+  }
+
+  /**
+   * The note's lines moved. The helper moves the ink for good, but that takes a few hundred ms, and meanwhile
+   * the ink would be left where the text was: when Live Preview corrected the height of the lines above while
+   * you scrolled up, the text stayed put and the ink flew off by 170 px and came back. So each stroke follows
+   * its line now, in the frame the line moved, until the helper's own drawing for these lines arrives.
+   */
+  moveLines(path: string, seq: number, tops: number[], hashes: number[]) {
+    if (path !== this.linesPath) {
+      this.linesPath = path;
+      this.sentLines.clear();
+    }
+    this.latest = { tops, hashes };
+    this.sentLines.set(seq, this.latest);
+    for (const old of this.sentLines.keys()) {
+      if (this.sentLines.size <= MAX_LINES) break;
+      if (old !== this.drawnFor) this.sentLines.delete(old);
+    }
+    this.follow();
+  }
+
+  /** Where each stroke's line is now against where it was drawn for. Text edited since: the helper's to work out. */
+  private follow() {
+    const from = this.sentLines.get(this.drawnFor);
+    const to = this.latest;
+    const same = !!from && !!to && this.linesPath === this.path && from.hashes.length === to.hashes.length
+      && from.hashes.every((h, i) => h === to.hashes[i]);
+    for (const entry of this.strokes.values()) {
+      const by = same && entry.line >= 0 && entry.line < to.tops.length ? to.tops[entry.line] - from.tops[entry.line] : 0;
+      const move = Math.abs(by) < 0.25 ? 0 : by;
+      if (move === entry.moved) continue;
+      entry.moved = move;
+      if (move) entry.el.setAttribute("transform", `translate(0 ${move})`);
+      else entry.el.removeAttribute("transform");
+    }
   }
 
   /** The helper's own layer is on screen (true) or not: this copy shows only when it isn't. */

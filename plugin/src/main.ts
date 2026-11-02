@@ -4,7 +4,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { DEFAULT_SETTINGS, DEFAULT_SLOTS, ERASER_SIZES, Ignored, InkSettings, NOT_IGNORED, PAGE_LINES, TOOLBAR_BUTTONS, ignoredFor, isDarkTheme, mmToPx, shownColor } from "./settings";
 import { Toolbar, ToolbarHost } from "./toolbar";
-import { clearBlankSpace, describeLayout, lineHashes, lineTops } from "./lines";
+import { clearBlankSpace, describeLayout, editorOf, lineHashes, lineTops } from "./lines";
 import { OverwriteModal, PullModal, SyncState, TextChange, applyTextChanges, noteBlocks, textColumn, withoutEchoes } from "./onenote";
 import { CANVAS_ORIGIN, InkKind, canvasLayout, imageLayout, inkFileFor, inkKindOf, pdfLayout } from "./targets";
 import { HandwritingIndex, HandwritingSearchModal, RecognizedLine, documentFor, insertRecognized, replaceLines } from "./writing";
@@ -42,6 +42,7 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
   private linesDirty = true;
   private linesMode = "";
   private linesPath = "";
+  private linesSeq = 0;
   /** Lowest ink point per note (CSS px from the top of the text column), reported by the helper. */
   private inkBottom = new Map<string, number>();
   /** How far each note's ink reaches left and right of its text column (CSS px), for the page width in split panes. */
@@ -929,6 +930,7 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
    */
   private onEditorUpdate(u: ViewUpdate) {
     this.merged.onText(u);
+    if (u.heightChanged && !u.docChanged) this.followHeights(u);
     if (!u.docChanged || this.ownEdit) return;
     // Only the editor of the note the ink is on: a note open twice gets each edit in both editors (the
     // other one is brought up to date), which would move its ink twice.
@@ -945,6 +947,23 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
     if (!shifts?.length) return;
     const inkPath = this.inkPathFor(base, file.path);
     for (const s of shifts) this.send({ type: "space-applied", inkPath, line: s.line, count: s.count });
+  }
+
+  /**
+   * Live Preview only knows a line's height once it has drawn it, and corrects the scroll by the difference as
+   * the lines come into view (by 100-200 px at a time, scrolling up a note with maths). The text doesn't move
+   * on screen, but it does on the page, so the lines are measured and sent in this same frame, not a moment later.
+   */
+  private followHeights(u: ViewUpdate) {
+    const view = this.activeNote();
+    if (!view || view.getMode() !== "source" || this.linesMode !== "source" || editorOf(view) !== u.view) return;
+    const base = this.vaultPath();
+    const sizer = view.contentEl.querySelector(".cm-sizer");
+    if (!base || !(sizer instanceof HTMLElement) || !view.file) return;
+    const inkPath = this.inkPathFor(base, view.file.path);
+    if (inkPath !== this.linesPath) return;
+    this.linesDirty = true;
+    this.syncLines(view, sizer, inkPath);
   }
 
   /**
@@ -1829,7 +1848,9 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
     // Record what the layout looked like a moment after each mode/note switch (once it has settled).
     const switched = !this.lastLines.startsWith(`${mode}|${inkPath}|`);
     this.lastLines = key;
-    this.send({ type: "lines", inkPath, mode, tops, blockTops, hashes, measuredFrom: layout.measuredFrom, measuredTo: layout.measuredTo });
+    const seq = ++this.linesSeq;
+    this.send({ type: "lines", inkPath, mode, seq, tops, blockTops, hashes, measuredFrom: layout.measuredFrom, measuredTo: layout.measuredTo });
+    this.domInk.moveLines(inkPath, seq, tops, hashes);
     if (switched) {
       window.setTimeout(() => {
         if (this.activeNote() !== view) return;

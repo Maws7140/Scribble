@@ -49,6 +49,7 @@ public sealed partial class OverlayWindow
     int[]? hashes;                 // per line: fingerprint of its text, 0 = blank / frontmatter
     readonly Dictionary<int, int> hashCount = new();
     string? topsMode;
+    int linesSeq;                   // which of the plugin's line positions these are (0: not a note's)
     (int from, int to) measured;
     Command? pendingLines;
     readonly HashSet<Stroke> unanchoredNew = new();
@@ -178,6 +179,7 @@ public sealed partial class OverlayWindow
         hashCount.Clear();
         if (hashes != null) foreach (var h in hashes) if (h != 0) hashCount[h] = hashCount.GetValueOrDefault(h) + 1;
         topsMode = cmd.Mode;
+        linesSeq = cmd.Seq ?? 0;
         measured = (cmd.MeasuredFrom ?? 0, cmd.MeasuredTo ?? int.MaxValue);
         // Room to draw down to the last line (a note), or to the end of the last page (a PDF: its pages are all
         // there is; see SizeInk for why it shouldn't be bigger than needed).
@@ -218,6 +220,7 @@ public sealed partial class OverlayWindow
         hashes = null;
         hashCount.Clear();
         topsMode = null;
+        linesSeq = 0;
         unanchoredNew.Clear();
         lastStroke = null;
         wantedHeight = 200_000;

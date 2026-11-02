@@ -193,7 +193,23 @@ function reserveBlankSpace(view: MarkdownView, r: PreviewRenderer, sizerTop: num
     }
     if (top !== px(s.el.style.marginTop) || bottom !== px(s.el.style.paddingBottom) || s.el.style.paddingTop) plan.push({ el: s.el, top, bottom });
   }
-  for (const p of plan) setSpace(p.el, p.top, p.bottom);
+  if (plan.length) keepingPlace(view, sections, () => { for (const p of plan) setSpace(p.el, p.top, p.bottom); });
+}
+
+/**
+ * Space going in above the screen pushes the text you're reading down the page, with no scroll to account for
+ * it: coming up a note for the first time, each block arriving above moved the text 11-22 px under the finger.
+ * So the first block on screen stays where it is, and the space goes in above the top of the screen.
+ */
+function keepingPlace(view: MarkdownView, sections: PreviewSection[], write: () => void) {
+  const scroller = view.contentEl.querySelector<HTMLElement>(".markdown-preview-view");
+  const screenTop = scroller?.getBoundingClientRect().top ?? 0;
+  const anchor = scroller ? sections.find((s) => measurable(s.el) && contentBox(s.el, 0).bottom > screenTop) : undefined;
+  const before = anchor ? contentBox(anchor.el, 0).top : 0;
+  write();
+  if (!scroller || !anchor) return;
+  const moved = contentBox(anchor.el, 0).top - before;
+  if (Math.abs(moved) >= 0.5) scroller.scrollTop += moved;
 }
 
 /** In the page and laid out with a real size (not detached, not display:none). */
