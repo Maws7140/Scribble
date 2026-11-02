@@ -521,6 +521,9 @@
 .oni-ink-host {
   position: relative;
 }
+.oni-has-ink .canvas-placeholder-message {
+  display: none;
+}
 /* On a canvas: above every card, even a focused one. */
 .canvas > .oni-ink-svg {
   z-index: 1000000;

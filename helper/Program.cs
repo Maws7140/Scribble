@@ -58,6 +58,7 @@ public sealed class Command
     public double[]? Lefts { get; set; }
     public double[]? Widths { get; set; }
     public double[]? Heights { get; set; }
+    public bool[]? Papers { get; set; }          // a canvas: which cards are a light page whatever the theme
     public double? Extent { get; set; }          // how big the ink layer must be (it's square), in ink units
     // Live Preview: each line's place before one-piece blocks' lines were spread over them (see Anchors).
     public double[]? BlockTops { get; set; }
@@ -72,6 +73,8 @@ public sealed class Command
     public ExportRequest? Export { get; set; }
     // "onenote-pull": bring OneNote edits back.
     public PullRequest? Pull { get; set; }
+    // "onenote-import": read a page for a canvas; "onenote-pages": list the pages to choose from.
+    public ImportRequest? Import { get; set; }
     // "onenote-poll": background sync's check for OneNote edits; "onenote-open": just show a page.
     public PollRequest? Poll { get; set; }
     public string? PageId { get; set; }

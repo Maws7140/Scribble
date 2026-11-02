@@ -53,6 +53,7 @@ public sealed partial class OverlayWindow : Window
     bool edited;
     bool scratchOut = true;
     bool dark;
+    Color? penColor; // the tool's true colour (none for effect pens, which aren't flipped)
     bool announcedShown;
     Command? lastTool;
     (int x, int y, int w, int h) placed;
@@ -210,6 +211,12 @@ public sealed partial class OverlayWindow : Window
             case "onenote-poll":
                 PollOneNote(cmd.Poll);
                 break;
+            case "onenote-pages":
+                ListOneNotePages();
+                break;
+            case "onenote-import":
+                ImportOneNotePage(cmd.Import);
+                break;
             case "onenote-open":
                 OpenInOneNote(cmd.PageId);
                 break;
@@ -315,8 +322,50 @@ public sealed partial class OverlayWindow : Window
     /// <summary>True colours → what's shown on this page (dark or light).</summary>
     void ToDisplay(StrokeCollection strokes)
     {
-        if (dark) ToDarkDisplay(strokes);
+        if (papers != null) ShowOnCards(strokes);
+        else if (dark) ToDarkDisplay(strokes);
         else ToLightDisplay(strokes);
+    }
+
+    bool OnPaper(Rect box) => papers != null && papers[LineFor(box)];
+
+    /// <summary>
+    /// A canvas can be both: a dark board with white pages lying on it, like a printout from OneNote. Ink over a
+    /// picture or PDF card goes by that page and the rest by the theme, so black writing on a printout stays
+    /// black. Each stroke's marker says what it's showing, so its true colour is never lost. True if any changed.
+    /// </summary>
+    bool ShowOnCards(StrokeCollection strokes)
+    {
+        bool changed = false;
+        foreach (var s in strokes)
+        {
+            bool flipped = s.DrawingAttributes.ContainsPropertyData(FlippedForDark);
+            var c = s.DrawingAttributes.Color;
+            if (flipped == ShowFlipped(flipped ? Invert(c) : c, OnPaper(s.GetBounds()))) continue;
+            var da = s.DrawingAttributes.Clone();
+            da.Color = Invert(c);
+            if (flipped) da.RemovePropertyData(FlippedForDark);
+            else da.AddPropertyData(FlippedForDark, 1);
+            s.DrawingAttributes = da;
+            changed = true;
+        }
+        return changed;
+    }
+
+    bool ShowFlipped(Color truth, bool onPaper) => dark && !onPaper ? IsDarkInk(truth) : IsLightInk(truth);
+
+    /// <summary>The pen over a card: its ink comes out in the colour it will stay, from the first point.</summary>
+    void PenOver(Point p)
+    {
+        if (papers == null || penColor is not { } truth) return;
+        var da = ink.DefaultDrawingAttributes;
+        bool flipped = da.ContainsPropertyData(FlippedForDark);
+        if (flipped == ShowFlipped(truth, OnPaper(new Rect(p, new Size(0, 0))))) return;
+        da = da.Clone();
+        da.Color = Invert(da.Color);
+        if (flipped) da.RemovePropertyData(FlippedForDark);
+        else da.AddPropertyData(FlippedForDark, 1);
+        ink.DefaultDrawingAttributes = da;
     }
 
     static void Flip(StrokeCollection strokes, Func<Color, bool> unreadable)
@@ -380,6 +429,7 @@ public sealed partial class OverlayWindow : Window
         // Effect pens have their own colours; what's saved is a representative plain one.
         string? effect = cmd.Tool == "pen" && !string.IsNullOrEmpty(cmd.Effect) ? cmd.Effect : null;
         var color = effect != null ? Pens.BaseColor(effect) : ParseColor(cmd.Color) ?? Colors.Black;
+        penColor = effect == null ? color : null;
         bool flipped = effect == null && (dark ? IsDarkInk(color) : IsLightInk(color));
         if (flipped) color = Invert(color);
         // Sizes are what you see on screen; in a zoomed PDF/image the ink units are bigger or smaller.
@@ -757,6 +807,7 @@ public sealed partial class OverlayWindow : Window
         ink.Strokes.StrokesChanged += (_, e) =>
         {
             if (!restoring && !importing) foreach (var s in e.Added) OnStrokeAdded(s);
+            if (papers != null && !restoring && !importing) ShowOnCards(new StrokeCollection(e.Added));
             // Pencil/effect strokes made by the canvas itself (drawn, split by the eraser) get their look once
             // the change is done (after ink-to-shape, which runs at a higher priority).
             if (e.Added.Any(s => s is not StyledStroke && Pens.StyleOf(s.DrawingAttributes) != null))

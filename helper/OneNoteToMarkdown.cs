@@ -75,7 +75,12 @@ public static class OneNoteToMarkdown
                 var tag = oe.Element(one + "Tag");
                 var list = oe.Element(one + "List");
 
-                if (IsCode(oeStyle, html) && tag == null && list == null)
+                if (oe.Element(one + "Table") is { } table)
+                {
+                    FlushCode();
+                    TableLines(table, lines);
+                }
+                else if (IsCode(oeStyle, html) && tag == null && list == null)
                 {
                     code.Add(PlainText(oe).TrimEnd());
                 }
@@ -108,6 +113,19 @@ public static class OneNoteToMarkdown
         if (top != null) Walk(top, 0);
         FlushCode();
         return string.Join("\n", lines).TrimEnd();
+    }
+
+    /// <summary>A table's rows as a Markdown table, the first row as its heading.</summary>
+    static void TableLines(XElement table, List<string> lines)
+    {
+        var rows = table.Elements(one + "Row").Select(r => r.Elements(one + "Cell")
+            .Select(c => string.Join(" ", c.Descendants(one + "OE").Select(PlainText)).Replace("|", "\\|").Replace("\n", " ").Trim()).ToList()).ToList();
+        if (rows.Count == 0) return;
+        for (int i = 0; i < rows.Count; i++)
+        {
+            lines.Add("| " + string.Join(" | ", rows[i]) + " |");
+            if (i == 0) lines.Add("| " + string.Join(" | ", rows[i].Select(_ => "---")) + " |");
+        }
     }
 
     static string StripBold(string md) => Regex.Replace(md, @"^\*\*(.*)\*\*$", "$1");

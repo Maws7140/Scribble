@@ -91,6 +91,8 @@ export interface InkSettings {
    * before two-way sync.
    */
   oneNotePages: Record<string, string | import("./onenote").SyncState>;
+  /** OneNote pages opened as canvases: page ID to the canvas's path. */
+  oneNoteCanvases: Record<string, string>;
   /** Math Assistant: angle unit for trig, and whether to show complex solutions. */
   mathAngle: "rad" | "deg" | "grad";
   /** Draw ink with the GPU (smoother on some machines, ~100 MB more memory); off: software rendering. */
@@ -159,6 +161,7 @@ export const DEFAULT_SETTINGS: InkSettings = {
   oneNoteScope: "sent",
   oneNoteConfirmText: false,
   oneNotePages: {},
+  oneNoteCanvases: {},
   mathAngle: "rad",
   gpuRendering: false,
   mathNumbers: "real",

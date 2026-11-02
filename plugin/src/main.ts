@@ -1,11 +1,12 @@
 import { App, FileSystemAdapter, FileView, MarkdownRenderChild, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile, debounce, getAllTags, loadMathJax } from "obsidian";
 import { spawn, ChildProcessWithoutNullStreams } from "child_process";
+import * as fs from "fs";
 import * as path from "path";
 import { DEFAULT_SETTINGS, DEFAULT_SLOTS, ERASER_SIZES, Ignored, InkSettings, NOT_IGNORED, PAGE_LINES, TOOLBAR_BUTTONS, ignoredFor, isDarkTheme, mmToPx, shownColor } from "./settings";
 import { Toolbar, ToolbarHost } from "./toolbar";
 import { clearBlankSpace, describeLayout, lineHashes, lineTops } from "./lines";
 import { OverwriteModal, PullModal, SyncState, TextChange, applyTextChanges, noteBlocks, textColumn, withoutEchoes } from "./onenote";
-import { InkKind, canvasLayout, imageLayout, inkFileFor, inkKindOf, pdfLayout } from "./targets";
+import { CANVAS_ORIGIN, InkKind, canvasLayout, imageLayout, inkFileFor, inkKindOf, pdfLayout } from "./targets";
 import { HandwritingIndex, HandwritingSearchModal, RecognizedLine, documentFor, insertRecognized, replaceLines } from "./writing";
 import { MATH_VIEW, MathHost, MathSource, MathView, readTyped } from "./math/pane";
 import { MathSettings } from "./math/engine";
@@ -15,6 +16,7 @@ import { EditGesture, applyEditGesture } from "./editgesture";
 import { DomInk, DomUpdate } from "./domink";
 import { lineShifts } from "./lineshift";
 import { MergedHistory } from "./undo";
+import { ImportCard, OneNotePage, PagePicker, freeCanvasPath, writeCanvas } from "./onenotecanvas";
 import { InkPrint, PrintReference, PrintStroke } from "./print";
 
 /**
@@ -75,6 +77,7 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
       this.save();
     } });
     this.addCommand({ id: "undo-ink", name: "Undo ink", callback: () => this.command("undo") });
+    this.addCommand({ id: "open-onenote-page-as-canvas", name: "Open a OneNote page as a canvas", callback: () => this.pickOneNotePage() });
     this.addCommand({
       id: "select-all-ink",
       name: "Select all ink on this page",
@@ -597,6 +600,12 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
         else request?.resolve((msg as unknown as { data?: string }).data ?? null);
         break;
       }
+      case "onenote-pages":
+        this.onOneNotePages(msg as unknown as { ok?: boolean; error?: string; pages?: OneNotePage[] });
+        break;
+      case "onenote-imported":
+        void this.onOneNotePageRead(msg as unknown as { ok?: boolean; id?: number; error?: string; title?: string; cards?: ImportCard[]; strokes?: number; tempDir?: string });
+        break;
       case "history":
         this.toolbar.setHistory(!!msg.canUndo, !!msg.canRedo);
         this.merged.onInk(msg.steps ?? 0, !!msg.added, !!msg.reset, !!msg.canUndo, !!msg.canRedo);
@@ -757,6 +766,74 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
     this.openInOneNote({ navigate: false });
   }
 
+  // ---------- OneNote pages as canvases ----------
+
+  private pagesNotice: Notice | null = null;
+  private imports = new Map<number, { pageId: string; canvasPath: string; inkPath: string; notice: Notice }>();
+  private importId = 0;
+
+  /** Pages keep their shape on a canvas, where a note's single column can't hold them. Only reads OneNote. */
+  private pickOneNotePage() {
+    this.pagesNotice?.hide();
+    this.pagesNotice = new Notice("Getting your OneNote pages...", 0);
+    this.send({ type: "onenote-pages" });
+  }
+
+  private onOneNotePages(msg: { ok?: boolean; error?: string; pages?: OneNotePage[] }) {
+    this.pagesNotice?.hide();
+    this.pagesNotice = null;
+    if (!msg.ok) {
+      new Notice(`Couldn't get your OneNote pages: ${msg.error ?? "unknown error"}`);
+      return;
+    }
+    new PagePicker(this.app, msg.pages ?? [], (page) => void this.openOneNotePage(page)).open();
+  }
+
+  private async openOneNotePage(page: OneNotePage) {
+    const base = this.vaultPath();
+    if (!base) return;
+    // Opened before: that canvas, not a second copy.
+    const opened = this.app.vault.getFileByPath(this.settings.oneNoteCanvases[page.id] ?? "");
+    if (opened) {
+      await this.app.workspace.getLeaf("tab").openFile(opened);
+      new Notice(`${page.title || "This page"} was already opened as this canvas.`);
+      return;
+    }
+    const folder = this.app.fileManager.getNewFileParent(this.app.workspace.getActiveFile()?.path ?? "");
+    const canvasPath = freeCanvasPath(this.app, folder.path, page.title);
+    const inkPath = path.join(base, inkFileFor(canvasPath, "canvas"));
+    const id = ++this.importId;
+    this.imports.set(id, {
+      pageId: page.id, canvasPath, inkPath,
+      notice: new Notice(`Reading "${page.title || "Untitled page"}" from OneNote. A page with a lot of ink can take a minute or two.`, 0),
+    });
+    this.send({ type: "onenote-import", import: { id, pageId: page.id, inkPath, origin: CANVAS_ORIGIN } });
+  }
+
+  private async onOneNotePageRead(msg: { ok?: boolean; id?: number; error?: string; title?: string; cards?: ImportCard[]; strokes?: number; tempDir?: string }) {
+    const job = this.imports.get(msg.id ?? -1);
+    if (!job) return;
+    this.imports.delete(msg.id!);
+    job.notice.hide();
+    try {
+      if (!msg.ok) throw new Error(msg.error ?? "unknown error");
+      const file = await writeCanvas(this.app, job.canvasPath, msg.title ?? "", msg.cards ?? []);
+      this.settings.oneNoteCanvases[job.pageId] = file.path;
+      this.persist();
+      await this.app.workspace.getLeaf("tab").openFile(file);
+      const hidden = this.ignoreFor(file).toolbar ? " Its folder isn't one your ink settings cover, so it has no ink tools there." : "";
+      new Notice(`Opened as ${file.path}: ${msg.cards?.length ?? 0} cards, ${msg.strokes ?? 0} strokes. The OneNote page isn't changed.${hidden}`, 8000);
+    } catch (e) {
+      // No canvas came of it, so none of its ink either.
+      fs.rmSync(job.inkPath, { force: true });
+      new Notice(`Couldn't open the page as a canvas: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      try {
+        if (msg.tempDir) fs.rmSync(msg.tempDir, { recursive: true, force: true });
+      } catch { /* only a temporary copy: the canvas is fine, and Windows clears it in time */ }
+    }
+  }
+
   // ---------- ink files follow their notes ----------
 
   /** A note (PDF, picture) renamed or moved: its ink goes along, and so does its OneNote page. */
@@ -774,6 +851,12 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
         const adapter = this.app.vault.adapter;
         if (await adapter.exists(from) && !(await adapter.exists(to))) await adapter.rename(from, to);
       })();
+    }
+    for (const [pageId, canvas] of Object.entries(this.settings.oneNoteCanvases)) {
+      if (canvas === oldPath) {
+        this.settings.oneNoteCanvases[pageId] = file.path;
+        this.persist();
+      }
     }
     const page = this.settings.oneNotePages[oldPath];
     if (page && !this.settings.oneNotePages[file.path]) {
@@ -1659,8 +1742,10 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
 
     const tops = layout.tops.map((t) => Math.round(t * 100) / 100);
     const cards = layout.cards;
+    // Canvas's hint for an empty board ("Drag from below...") only knows about cards: it goes once there's ink.
+    if (cards) view.contentEl.toggleClass("oni-has-ink", inkOn && (this.inkBottom.get(inkPath) ?? 0) > 0);
     const mode = cards ? "canvas" : "page";
-    const linesKey = `${mode}|${inkPath}|${tops.join(",")}|${layout.hashes.join(",")}|${cards ? [cards.lefts, cards.widths, cards.heights].join("|") : ""}`;
+    const linesKey = `${mode}|${inkPath}|${tops.join(",")}|${layout.hashes.join(",")}|${cards ? [cards.lefts, cards.widths, cards.heights, cards.papers].join("|") : ""}`;
     if (linesKey !== this.lastLines) {
       this.lastLines = linesKey;
       this.send({ type: "lines", inkPath, mode, tops, hashes: layout.hashes, measuredFrom: 0, measuredTo: tops.length - 1, ...cards });

@@ -34,7 +34,7 @@ export interface ContentLayout {
   source: string;
   dark: boolean;
   /** A canvas: each "line" is a card (see canvasLayout). */
-  cards?: { lefts: number[]; widths: number[]; heights: number[]; extent: number };
+  cards?: { lefts: number[]; widths: number[]; heights: number[]; papers: boolean[]; extent: number };
 }
 
 const fnv = (s: string) => {
@@ -98,7 +98,15 @@ export const CANVAS_ORIGIN = 50_000;
 const CANVAS_EXTENT = CANVAS_ORIGIN * 2;
 
 // Obsidian's Canvas (internal; only for the cards: where they are and which is on top).
-interface CanvasCard { id: string; x: number; y: number; width: number; height: number; renderedZIndex?: number; nodeEl?: HTMLElement }
+interface CanvasCard { id: string; x: number; y: number; width: number; height: number; renderedZIndex?: number; nodeEl?: HTMLElement; filePath?: string }
+
+/** A card ink sits on as on a light page, whatever the theme: a picture, or a PDF that isn't drawn dark. */
+function isPaper(card: CanvasCard) {
+  if (/\.(png|jpe?g|gif|bmp|webp|svg|avif)$/i.test(card.filePath ?? "")) return true;
+  if (!/\.pdf$/i.test(card.filePath ?? "")) return false;
+  const page = card.nodeEl?.querySelector(".page");
+  return !page || !isDarkColor(getComputedStyle(page).backgroundColor);
+}
 
 /**
  * A canvas laid out for ink. Position and zoom come from the layer Canvas draws its cards in, so they're
@@ -129,6 +137,7 @@ export function canvasLayout(view: FileView): ContentLayout | null {
       lefts: [0, ...cards.map((c) => c.x + CANVAS_ORIGIN)],
       widths: [0, ...cards.map((c) => c.width)],
       heights: [0, ...cards.map((c) => c.height)],
+      papers: [false, ...cards.map(isPaper)],
       extent: CANVAS_EXTENT,
     },
     source: "canvas",

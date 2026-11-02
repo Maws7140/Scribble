@@ -52,8 +52,10 @@ public sealed partial class OverlayWindow
 
         // After a shape, the rough stroke's wet ink has gone by the time the pen comes down again.
         ink.PreviewMouseDown += (_, _) => { if (shapePreview == null) ink.WetInkHidden = false; };
+        ink.PreviewStylusInAirMove += (_, e) => PenOver(e.GetPosition(ink));
         ink.PreviewStylusDown += (_, e) =>
         {
+            PenOver(e.GetPosition(ink));
             ClearHold();
             ink.WetInkHidden = false;
             // Not the eraser end: the canvas stays in ink mode while the pen is flipped, and an erasing

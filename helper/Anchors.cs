@@ -45,6 +45,7 @@ public sealed partial class OverlayWindow
     double[]? tops;
     double[]? blockTops;            // Live Preview: lines at their block's top, as anchors before model 2 had them
     double[]? lefts, widths, heights; // a canvas: with `tops`, the rectangle of the board (0) and each card
+    bool[]? papers;                 // a canvas: the cards that are pictures or PDFs (see ShowOnCards)
     int[]? hashes;                 // per line: fingerprint of its text, 0 = blank / frontmatter
     readonly Dictionary<int, int> hashCount = new();
     string? topsMode;
@@ -172,6 +173,7 @@ public sealed partial class OverlayWindow
         lefts = canvas ? cmd.Lefts : null;
         widths = canvas ? cmd.Widths : null;
         heights = canvas ? cmd.Heights : null;
+        papers = canvas && cmd.Papers?.Length == cmd.Tops!.Length ? cmd.Papers : null;
         hashes = cmd.Hashes != null && cmd.Hashes.Length == cmd.Tops!.Length ? cmd.Hashes : null;
         hashCount.Clear();
         if (hashes != null) foreach (var h in hashes) if (h != 0) hashCount[h] = hashCount.GetValueOrDefault(h) + 1;
@@ -184,6 +186,7 @@ public sealed partial class OverlayWindow
         else if (tops!.Length > 0) wantedHeight = topsMode == "page" ? tops[^1] + 2_000 : Math.Max(200_000, tops[^1] + 20_000);
         SizeInk();
         Reanchor();
+        if (papers != null && ShowOnCards(ink.Strokes)) SchedulePublish();
     }
 
     /// <summary>
@@ -211,6 +214,7 @@ public sealed partial class OverlayWindow
         tops = null;
         blockTops = null;
         lefts = widths = heights = null;
+        papers = null;
         hashes = null;
         hashCount.Clear();
         topsMode = null;

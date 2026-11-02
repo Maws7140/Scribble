@@ -128,6 +128,35 @@ public sealed partial class OverlayWindow
         }, req.NoteKey);
     }
 
+    /// <summary>The pages to choose from, for opening one as a canvas.</summary>
+    void ListOneNotePages()
+    {
+        void Failed(string error) => Protocol.Send(new { type = "onenote-pages", ok = false, error });
+        RunOneNote(() =>
+        {
+            try { Protocol.Send(new { type = "onenote-pages", ok = true, pages = OneNoteImport.ListPages(OneNote.Connect()) }); }
+            catch (Exception e) when (!Unreachable(e)) { Protocol.Log("OneNote pages: " + e); Failed(e.Message); }
+        }, null, unreachable: () => Failed("OneNote isn't responding right now (it may be starting, updating or closed)."));
+    }
+
+    /// <summary>Read a page for a canvas: its ink goes straight to the file, the rest to the plugin to put in the vault.</summary>
+    void ImportOneNotePage(ImportRequest? req)
+    {
+        if (req == null) return;
+        void Failed(string error) => Protocol.Send(new { type = "onenote-imported", ok = false, id = req.Id, error });
+        RunOneNote(() =>
+        {
+            try
+            {
+                var watch = System.Diagnostics.Stopwatch.StartNew();
+                var r = OneNoteImport.Read(OneNote.Connect(), req);
+                Protocol.Log($"OneNote: read a page for a canvas: {r.Cards.Count} cards, {r.Strokes} strokes, {watch.ElapsedMilliseconds} ms");
+                Protocol.Send(new { type = "onenote-imported", ok = true, id = req.Id, title = r.Title, cards = r.Cards, strokes = r.Strokes, tempDir = r.TempDir });
+            }
+            catch (Exception e) when (!Unreachable(e)) { Protocol.Log("OneNote import: " + e); Failed(e.Message); }
+        }, null, unreachable: () => Failed("OneNote isn't responding right now (it may be starting, updating or closed)."));
+    }
+
     /// <summary>Background sync: which synced notes' pages were edited in OneNote since we last looked.</summary>
     void PollOneNote(PollRequest? req)
     {
