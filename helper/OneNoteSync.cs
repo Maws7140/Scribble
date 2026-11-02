@@ -81,6 +81,9 @@ public static class OneNoteSync
     const double PtPerPx = 0.75, PageLeft = 36, PageTop = 86;
     static readonly XNamespace one = OneNote.Ns;
 
+    /// <summary>For <see cref="ReadInk"/>: the page's own 0,0 as 0,0, in CSS px.</summary>
+    internal static readonly SyncState PageOrigin = new() { OriginX = PageLeft / PtPerPx, OriginY = PageTop / PtPerPx };
+
     internal static XDocument Page(IOneNoteApplication app, string pageId)
     {
         app.GetPageContent(pageId, out var xml, 0, OneNote.Xs2013);
@@ -125,7 +128,7 @@ public static class OneNoteSync
     /// text boxes (InkWord: OneNote doesn't say where each word sits, so it goes on its paragraph's line in
     /// that box, words left to right). In page points for fingerprinting, or Obsidian px with `toObsidian`.
     /// </summary>
-    static (StrokeCollection ink, string sig, int inkWords) ReadInk(IOneNoteApplication app, string pageId, XDocument page, SyncState? toObsidian)
+    internal static (StrokeCollection ink, string sig, int inkWords) ReadInk(IOneNoteApplication app, string pageId, XDocument page, SyncState? toObsidian)
     {
         var all = new StrokeCollection();
         var parts = new List<string>();
@@ -146,7 +149,9 @@ public static class OneNoteSync
             if (strokes == null) continue;
             OneNoteExport.HighlightersFromOneNote(strokes);
             var pos = d.Element(one + "Position");
-            Place(strokes, Num(pos?.Attribute("x")), Num(pos?.Attribute("y")));
+            double px = Num(pos?.Attribute("x")), py = Num(pos?.Attribute("y"));
+            ToDrawingLocal(strokes, px, py);
+            Place(strokes, px, py);
         }
 
         foreach (var o in page.Root!.Elements(one + "Outline"))
@@ -174,6 +179,21 @@ public static class OneNoteSync
             }
         }
         return (all, $"{all.Count}|{points}|{string.Join(";", parts)}", inkWords);
+    }
+
+    /// <summary>
+    /// Ink written in OneNote holds page positions (its Position only repeats them, to within a pen's width or
+    /// so); ink we send is relative to its Position, and OneNote keeps it that way. Read as relative, OneNote's
+    /// own ink had every stroke pushed out by its own position, which shattered the writing. Makes either kind
+    /// relative. A drawing near the page's 0,0 reads the same both ways, so that case can't go wrong.
+    /// </summary>
+    internal static void ToDrawingLocal(StrokeCollection strokes, double xPt, double yPt)
+    {
+        if (strokes.Count == 0) return;
+        var b = strokes.GetBounds();
+        if (Math.Abs(b.Left) < 5 && Math.Abs(b.Top) < 5) return;
+        if (Math.Abs(b.Left * PtPerPx - xPt) > 60 || Math.Abs(b.Top * PtPerPx - yPt) > 60) return;
+        strokes.Transform(new Matrix(1, 0, 0, 1, -xPt / PtPerPx, -yPt / PtPerPx), false);
     }
 
     static double Num(XAttribute? a) =>
