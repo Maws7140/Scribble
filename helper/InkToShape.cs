@@ -14,7 +14,9 @@ namespace InkOverlay;
 
 /// <summary>
 /// OneNote's "draw and hold" ink-to-shape: draw a shape, keep the pen still on the screen, and a clean
-/// shape previews; lift the pen and it replaces the stroke. Move again instead and nothing happens.
+/// shape previews; lift the pen and it replaces the stroke, selected, so it can be turned with the rotate
+/// handle, resized or moved. The pen anywhere else lets go of it and writes again. Move again instead of
+/// lifting and nothing happens.
 /// </summary>
 public sealed partial class OverlayWindow
 {
@@ -130,6 +132,7 @@ public sealed partial class OverlayWindow
         // Replaced together, so a single undo brings back the hand-drawn strokes (history snapshots are debounced).
         if (shape.UsesPrevious) ink.Strokes.Remove(previous!);
         ink.Strokes.Replace(e.Stroke, new StrokeCollection { clean });
+        SelectToAdjust(new StrokeCollection { clean });
         Protocol.Log($"ink to shape: {shape.Kind}{(shape.UsesPrevious ? " (two strokes)" : "")}");
     }
 

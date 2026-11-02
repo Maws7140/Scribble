@@ -101,6 +101,17 @@ public sealed partial class OverlayWindow
     static bool SideButton(StylusDevice device) =>
         device.StylusButtons.Any(b => b.Guid == StylusPointProperties.BarrelButton.Id && b.StylusButtonState == StylusButtonState.Down);
 
+    /// <summary>Select ink to adjust it. As with the side button, letting go goes back to the tool you had.</summary>
+    void SelectToAdjust(StrokeCollection strokes)
+    {
+        if (ink.EditingMode != InkCanvasEditingMode.Select)
+        {
+            modeBeforeLasso = ink.EditingMode;
+            sideLasso = true;
+        }
+        ink.Select(strokes);
+    }
+
     /// <summary>
     /// Let go of the selection, leaving the tool as it is. InkCanvas.Select switches the pen to selecting even
     /// when it's given nothing to select, so an undo, Esc or erasing the page left the pen stuck lassoing.
@@ -311,14 +322,7 @@ public sealed partial class OverlayWindow
                 break;
             }
             case "select-all":
-                // Like the side button: letting go of the selection goes back to the tool you had.
-                if (ink.EditingMode != InkCanvasEditingMode.Select)
-                {
-                    modeBeforeLasso = ink.EditingMode;
-                    sideLasso = true;
-                    ink.EditingMode = InkCanvasEditingMode.Select;
-                }
-                ink.Select(ink.Strokes);
+                SelectToAdjust(ink.Strokes);
                 break;
             case "clear-ink":
                 // One undo step brings it all back.
