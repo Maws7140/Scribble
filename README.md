@@ -23,7 +23,7 @@ Write on any note, PDF or picture in Obsidian with a pen, using Windows Ink (the
 ## Build and install
 
 ```bash
-cd helper && dotnet publish -c Release -o publish
+cd helper && dotnet publish -c Release -r win-x64 -o publish   # or -r win-arm64
 cd ../plugin && npm install && npm run build
 node install.mjs "C:\path\to\your\vault"
 ```

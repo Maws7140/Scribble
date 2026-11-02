@@ -64,8 +64,15 @@
 /* On a canvas it won't re-fit its buttons (it only does for notes), so what doesn't fit goes on another
    row rather than out of reach. */
 .oni-et-host.oni-et-canvas {
+  flex-wrap: wrap !important;
+  height: auto !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  box-sizing: border-box;
+}
+.oni-et-host.oni-et-canvas .oni-toolbar.oni-in-et {
   flex-wrap: wrap;
-  height: auto;
+  max-width: 100%;
 }
 /* Its own undo and redo do ink and text both there (see MergedHistory). */
 .oni-toolbar.oni-in-et .oni-history {
