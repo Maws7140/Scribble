@@ -69,6 +69,8 @@ export interface InkSettings {
   ruled: boolean;
   /** Rule or grid lines: "none", "text", or one of PAGE_LINES. */
   pageLines: string;
+  /** Each canvas's rule or grid lines, by its path: one of PAGE_LINES. A canvas not here has none. */
+  canvasLines: Record<string, string>;
   /** The ruler is out. */
   ruler: boolean;
   /** The shape the Shapes button draws. */
@@ -158,6 +160,7 @@ export const DEFAULT_SETTINGS: InkSettings = {
   lastEraser: "eraser-stroke",
   ruled: false,
   pageLines: "none",
+  canvasLines: {},
   ruler: false,
   shape: "rectangle",
   oneNoteSection: "Obsidian",

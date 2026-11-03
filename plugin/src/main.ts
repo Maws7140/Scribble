@@ -20,6 +20,7 @@ import { MergedHistory, PageHistory } from "./undo";
 import { ImportCard, OneNotePage, PagePicker, freeCanvasPath, writeCanvas } from "./onenotecanvas";
 import { CardChange, applyCardChanges, canvasNodes } from "./canvassync";
 import { CanvasTouch, TouchCanvas } from "./canvastouch";
+import { ruleCanvas } from "./canvaslines";
 import { InkPrint, PrintReference, PrintStroke } from "./print";
 
 /**
@@ -261,6 +262,10 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
       this.ignoreCache.clear();
       this.handwriting.remove(f.path);
       if (f instanceof TFile && f.extension !== "ink") this.inkFileGone(f);
+      if (this.settings.canvasLines[f.path]) {
+        delete this.settings.canvasLines[f.path];
+        this.persist();
+      }
       const link = this.settings.oneNoteCanvasSync[f.path];
       if (link) {
         // The canvas is gone; its page stays in OneNote, just no longer in sync with anything.
@@ -1080,6 +1085,12 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
         if (await adapter.exists(from) && !(await adapter.exists(to))) await adapter.rename(from, to);
       })();
     }
+    const lines = this.settings.canvasLines[oldPath];
+    if (lines) {
+      this.settings.canvasLines[file.path] = lines;
+      delete this.settings.canvasLines[oldPath];
+      this.persist();
+    }
     const link = this.settings.oneNoteCanvasSync[oldPath];
     if (link) {
       this.settings.oneNoteCanvasSync[file.path] = link;
@@ -1684,7 +1695,21 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
     return { view, kind };
   }
 
-  /** The kind of thing the toolbar is on (notes get rule lines and OneNote; PDFs and images don't). */
+  /** The lines on what's in front: notes all share one choice, and each canvas has its own. */
+  pageLines(): string {
+    const canvas = this.activeCanvas();
+    return canvas ? this.settings.canvasLines[canvas.path] ?? "none" : this.settings.pageLines;
+  }
+
+  setPageLines(id: string) {
+    const canvas = this.activeCanvas();
+    if (!canvas) this.settings.pageLines = id;
+    else if (id === "none") delete this.settings.canvasLines[canvas.path];
+    else this.settings.canvasLines[canvas.path] = id;
+    this.save();
+  }
+
+  /** The kind of thing the toolbar is on (notes and canvases get rule lines and OneNote; PDFs and images don't). */
   inkKind(): InkKind | null {
     return this.activeInkView()?.kind ?? null;
   }
@@ -2022,6 +2047,9 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
    */
   private syncContent(view: FileView, kind: InkKind, base: string | null, covered: boolean, inkOn: boolean) {
     const layout = kind === "pdf" ? pdfLayout(view) : kind === "canvas" ? canvasLayout(view) : imageLayout(view);
+    if (layout && kind === "canvas" && view.file) {
+      ruleCanvas(view, this.ignoreFor(view.file).lines ? undefined : this.settings.canvasLines[view.file.path], layout.zoom);
+    }
     const inkPath = base && view.file ? path.join(base, inkFileFor(view.file.path, kind)) : null;
     let msg: object = { type: "layout", visible: false };
     this.inkArea = null;

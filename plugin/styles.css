@@ -566,6 +566,34 @@
   z-index: 1000000;
   pointer-events: none;
 }
+/* Rule or grid lines on a canvas (see canvaslines.ts): under the cards, all the way out. */
+.oni-canvas-ruled .canvas-background {
+  visibility: hidden;
+}
+.canvas > .oni-canvas-lines {
+  --oni-rule-color: color-mix(in srgb, var(--text-faint) 45%, transparent);
+  position: absolute;
+  left: -50000px;
+  top: -50000px;
+  width: 100000px;
+  height: 100000px;
+  z-index: -1;
+  pointer-events: none;
+  background-image: linear-gradient(to bottom, transparent calc(100% - var(--oni-rule-width)), var(--oni-rule-color) calc(100% - var(--oni-rule-width)));
+  background-size: 100% var(--oni-rule-pitch);
+  background-position: 0 var(--oni-rule-phase);
+}
+.canvas > .oni-canvas-lines.is-grid {
+  --oni-rule-color: color-mix(in srgb, var(--text-faint) 35%, transparent);
+  background-image:
+    linear-gradient(to bottom, transparent calc(100% - var(--oni-rule-width)), var(--oni-rule-color) calc(100% - var(--oni-rule-width))),
+    linear-gradient(to right, transparent calc(100% - var(--oni-rule-width)), var(--oni-rule-color) calc(100% - var(--oni-rule-width)));
+  background-size: var(--oni-rule-pitch) var(--oni-rule-pitch);
+  background-position: var(--oni-rule-phase) var(--oni-rule-phase);
+}
+.canvas > .oni-canvas-lines.is-too-fine {
+  display: none;
+}
 /* A split pane keeps the note's full-width page (see keepPageWidth) and scrolls sideways to the rest. */
 .oni-page-scroller {
   overflow-x: auto !important;

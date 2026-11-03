@@ -18,7 +18,10 @@ export interface ToolbarHost {
   layerOn(): boolean;
   openInOneNote(): void;
   pullFromOneNote(): void;
-  /** What the toolbar is on: notes get rule lines and OneNote; PDFs, images and canvases don't. */
+  /** The rule or grid lines on what the toolbar is on, and changing them. */
+  pageLines(): string;
+  setPageLines(id: string): void;
+  /** What the toolbar is on: notes and canvases get rule lines and OneNote; PDFs and images don't. */
   inkKind(): "markdown" | "pdf" | "image" | "canvas" | null;
 }
 
@@ -174,19 +177,22 @@ export class Toolbar {
         menu.showAtPosition({ x: r.left, y: r.bottom + 4 });
       }, right, "onenote");
     }
-    if (this.host.inkKind() === "markdown") {
+    if (this.host.inkKind() === "markdown" || this.host.inkKind() === "canvas") {
       const lines = this.button("align-justify", "Rule and grid lines", () => {
         const menu = new Menu();
-        menu.addItem((i) => i.setTitle("No lines").setChecked(s.pageLines === "none").onClick(() => { s.pageLines = "none"; this.host.save(); }));
+        const current = this.host.pageLines();
+        menu.addItem((i) => i.setTitle("No lines").setChecked(current === "none").onClick(() => this.host.setPageLines("none")));
         menu.addSeparator();
         for (const l of PAGE_LINES) {
+          // A canvas has no one line of text to match.
+          if (l.id === "text" && this.host.inkKind() === "canvas") continue;
           if (l.id === "grid-small") menu.addSeparator();
-          menu.addItem((i) => i.setTitle(l.label).setChecked(s.pageLines === l.id).onClick(() => { s.pageLines = l.id; this.host.save(); }));
+          menu.addItem((i) => i.setTitle(l.label).setChecked(current === l.id).onClick(() => this.host.setPageLines(l.id)));
         }
         const r = lines.getBoundingClientRect();
         menu.showAtPosition({ x: r.left, y: r.bottom + 4 });
       }, right, "lines");
-      lines.toggleClass("is-active", s.pageLines !== "none");
+      lines.toggleClass("is-active", this.host.pageLines() !== "none");
     }
     this.button("hand", s.touchInk ? "Draw with touch is on: your finger inks (tap to turn off)" : "Draw with touch: let your finger ink too", () => {
       s.touchInk = !s.touchInk;
