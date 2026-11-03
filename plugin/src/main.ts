@@ -19,6 +19,7 @@ import { lineShifts } from "./lineshift";
 import { MergedHistory, PageHistory } from "./undo";
 import { ImportCard, OneNotePage, PagePicker, freeCanvasPath, writeCanvas } from "./onenotecanvas";
 import { CardChange, applyCardChanges, canvasNodes } from "./canvassync";
+import { CanvasTouch, TouchCanvas } from "./canvastouch";
 import { InkPrint, PrintReference, PrintStroke } from "./print";
 
 /**
@@ -79,6 +80,7 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
   /** One undo for ink and text, for Editing Toolbar's undo and redo when the ink tools are in its bar. */
   private merged = new MergedHistory((command) => this.command(command));
   private watchedCanvas: CanvasWithHistory | null = null;
+  private canvasTouch = new CanvasTouch((message) => this.send({ type: "debug", message }));
   private mergedCanvases = new WeakSet<CanvasWithHistory>();
   private printing = new InkPrint(this);
   private printId = 0;
@@ -299,6 +301,13 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
       const what = el ? `${el.tagName.toLowerCase()}.${Array.from(el.classList).join(".")}` : "?";
       this.send({ type: "debug", message: `pen down reached Obsidian, not the ink layer: (${Math.round(e.clientX)},${Math.round(e.clientY)}) on ${what} in a ${this.inkKind()} view` });
     }, { capture: true });
+
+    // A finger on a canvas drags and pinches it (see canvastouch.ts).
+    this.registerDomEvent(window, "pointerdown", (e: PointerEvent) => this.canvasTouch.onPointerDown(e, this.touchCanvas()), { capture: true });
+    this.registerDomEvent(window, "pointermove", (e: PointerEvent) => this.canvasTouch.onPointerMove(e), { capture: true, passive: true });
+    for (const end of ["pointerup", "pointercancel"] as const) {
+      this.registerDomEvent(window, end, (e: PointerEvent) => this.canvasTouch.onPointerEnd(e), { capture: true });
+    }
 
     // Lines going in or out of a note: the ink under them moves with them (see onEditorUpdate).
     this.registerEditorExtension(EditorView.updateListener.of((u) => this.onEditorUpdate(u)));
@@ -670,6 +679,9 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
       case "onenote-poll-result":
         for (const noteKey of msg.changed ?? []) this.pullFromOneNote(noteKey, "auto");
         break;
+      case "overlay-touch":
+        this.onOverlayTouch(msg as unknown as { phase: string; id: number; x: number; y: number });
+        break;
       case "onenote-canvas-sent":
         this.onCanvasSent(msg as unknown as { ok?: boolean; canvasPath: string; pageId?: string; lastModified?: string; navigated?: boolean; navigate?: boolean; pageChanged?: boolean });
         break;
@@ -821,6 +833,23 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
     this.pendingPush.delete(path);
     if (canvas) void this.sendCanvas(path, false);
     else this.openInOneNote({ navigate: false });
+  }
+
+  /** The canvas in front, if that's what's there. */
+  private touchCanvas(): TouchCanvas | null {
+    const active = this.activeInkView();
+    return active?.kind === "canvas" ? (active.view as unknown as { canvas?: TouchCanvas }).canvas ?? null : null;
+  }
+
+  /** A finger that landed on the ink layer, in front of Obsidian while the pen is near. */
+  private onOverlayTouch(msg: { phase: string; id: number; x: number; y: number }) {
+    const canvas = this.touchCanvas();
+    const area = this.inkArea;
+    if (!canvas || !area) return;
+    const x = area.left + msg.x, y = area.top + msg.y;
+    if (msg.phase === "down") this.canvasTouch.down(msg.id, x, y, canvas, "ink layer");
+    else if (msg.phase === "move") this.canvasTouch.move(msg.id, x, y);
+    else this.canvasTouch.up(msg.id);
   }
 
   // ---------- canvases and their pages (see helper/OneNoteCanvasSync.cs) ----------

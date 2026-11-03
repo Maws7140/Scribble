@@ -106,6 +106,7 @@ public sealed partial class OverlayWindow : Window
         InitWriting();
         InitPageTools();
         InitInkDom();
+        InitOverlayTouch();
         // A scribble the recognizer let through as ink (see ScratchOutBy): erase what it covers, after the
         // other handlers of the new stroke have run.
         ink.StrokeCollected += (_, e) =>
