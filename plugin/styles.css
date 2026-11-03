@@ -14,6 +14,15 @@
   pointer-events: none;
 }
 
+/* Reading view detaches off-screen blocks and sets an inline min-height for the text. Keep the ink's
+   writing area as a separate height floor so that detaching the text cannot collapse the scroll range. */
+.markdown-preview-sizer.oni-grow {
+  min-block-size: max(var(--oni-preview-height, 0px), var(--oni-ink-height, 0px)) !important;
+}
+.markdown-preview-sizer.oni-grow::after {
+  content: none;
+}
+
 /* Notebook rule lines; pitch and phase follow the body text (set by the plugin). On a kept-width page
    (see .oni-page) they're drawn by its ::before, which covers the whole width the ink can use. */
 .oni-ruled,

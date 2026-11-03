@@ -1937,7 +1937,10 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
   /**
    * Make the note as tall as its ink, like it already is for its text: keep a writing margin of blank
    * page below the lowest stroke, so writing near the bottom always leaves room to scroll on.
-   * The space is a ::after spacer on the sizer (see styles.css), so Obsidian's own DOM is untouched.
+   * Reading view needs a minimum page height: its virtual renderer can detach every text block when
+   * scrolling into the ink below them. An in-flow spacer then fits inside the renderer's min-height,
+   * the page shrinks and the browser clamps the scroll back up before the next frame can repair it.
+   * Live Preview keeps its ::after spacer; neither mode changes Obsidian's content DOM.
    */
 
   unkeepPageWidths() {
@@ -1953,9 +1956,18 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
 
   private growPage(sizer: HTMLElement, pageHeight: number, areaHeight: number, inkPath: string) {
     sizer.addClass("oni-grow");
-    const current = parseFloat(sizer.style.getPropertyValue("--oni-ink-space")) || 0;
     const bottom = this.inkBottom.get(inkPath) ?? 0;
     const room = Math.max(240, areaHeight * 0.5);
+    if (sizer.hasClass("markdown-preview-sizer")) {
+      const set = (name: string, value: string) => {
+        if (sizer.style.getPropertyValue(name) !== value) sizer.style.setProperty(name, value);
+      };
+      // Keep the renderer's own text-height estimate too, including notes taller than their ink.
+      set("--oni-preview-height", sizer.style.minHeight || "0px");
+      set("--oni-ink-height", `${bottom > 0 ? Math.ceil(bottom + room) : 0}px`);
+      return;
+    }
+    const current = parseFloat(sizer.style.getPropertyValue("--oni-ink-space")) || 0;
     const natural = pageHeight - current;
     const needed = bottom > 0 ? Math.max(0, Math.ceil(bottom + room - natural)) : 0;
     if (Math.abs(needed - current) >= 1) sizer.style.setProperty("--oni-ink-space", `${needed}px`);
