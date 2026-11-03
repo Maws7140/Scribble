@@ -18,6 +18,7 @@ import { DomInk, DomUpdate } from "./domink";
 import { lineShifts } from "./lineshift";
 import { MergedHistory, PageHistory } from "./undo";
 import { ImportCard, OneNotePage, PagePicker, freeCanvasPath, writeCanvas } from "./onenotecanvas";
+import { CardChange, applyCardChanges, canvasNodes } from "./canvassync";
 import { InkPrint, PrintReference, PrintStroke } from "./print";
 
 /**
@@ -167,7 +168,7 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
       id: "open-in-onenote",
       name: "Open in OneNote",
       checkCallback: (checking) => {
-        if (!this.activeNote()) return false;
+        if (!this.activeNote() && !this.activeCanvas()) return false;
         if (!checking) this.openInOneNote();
         return true;
       },
@@ -176,8 +177,9 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
       id: "pull-from-onenote",
       name: "Pull changes from OneNote",
       checkCallback: (checking) => {
+        const canvas = this.activeCanvas();
         const view = this.activeNote();
-        if (!view?.file || !this.syncState(view.file.path)) return false;
+        if (!(canvas && this.settings.oneNoteCanvasSync[canvas.path]) && !(view?.file && this.syncState(view.file.path))) return false;
         if (!checking) this.pullFromOneNote();
         return true;
       },
@@ -257,6 +259,13 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
       this.ignoreCache.clear();
       this.handwriting.remove(f.path);
       if (f instanceof TFile && f.extension !== "ink") this.inkFileGone(f);
+      const link = this.settings.oneNoteCanvasSync[f.path];
+      if (link) {
+        // The canvas is gone; its page stays in OneNote, just no longer in sync with anything.
+        delete this.settings.oneNoteCanvasSync[f.path];
+        fs.rmSync(this.canvasStatePath(link.id), { force: true });
+        this.persist();
+      }
     }));
     this.registerEvent(this.app.vault.on("rename", (f, old) => {
       this.ignoreCache.clear();
@@ -265,6 +274,7 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
     }));
     this.registerEvent(this.app.vault.on("modify", (f) => {
       if (f instanceof TFile && f.extension === "ink" && f.path !== this.loadedInkPath()) this.queueIndex([f]);
+      if (f instanceof TFile && f.extension === "canvas") this.markDirty(f.path);
     }));
 
     // A pen hovering over the note arms the overlay so the stroke goes to Windows Ink.
@@ -635,7 +645,7 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
         this.onOneNotePages(msg as unknown as { ok?: boolean; error?: string; pages?: OneNotePage[] });
         break;
       case "onenote-imported":
-        void this.onOneNotePageRead(msg as unknown as { ok?: boolean; id?: number; error?: string; title?: string; cards?: ImportCard[]; strokes?: number; tempDir?: string });
+        void this.onOneNotePageRead(msg as unknown as { ok?: boolean; id?: number; error?: string; title?: string; cards?: ImportCard[]; strokes?: number; tempDir?: string; lastModified?: string });
         break;
       case "history":
         this.toolbar.setHistory(!!msg.canUndo, !!msg.canRedo);
@@ -659,6 +669,12 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
         break;
       case "onenote-poll-result":
         for (const noteKey of msg.changed ?? []) this.pullFromOneNote(noteKey, "auto");
+        break;
+      case "onenote-canvas-sent":
+        this.onCanvasSent(msg as unknown as { ok?: boolean; canvasPath: string; pageId?: string; lastModified?: string; navigated?: boolean; navigate?: boolean; pageChanged?: boolean });
+        break;
+      case "onenote-canvas-pulled":
+        void this.onCanvasPulled(msg as unknown as { canvasPath: string; manual?: boolean; changes?: CardChange[]; tempDir?: string; strokesIn?: number; strokesOut?: number; lastModified?: string });
         break;
       case "saved":
         // Only saves of new or changed ink are edits to sync; a save before a send, or of ink just moved to
@@ -740,6 +756,7 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
   }
 
   private syncsNote(path: string) {
+    if (path.endsWith(".canvas")) return this.autoSync() && !!this.settings.oneNoteCanvasSync[path];
     return this.autoSync() && (!!this.settings.oneNotePages[path] || this.settings.oneNoteScope === "opened");
   }
 
@@ -759,6 +776,11 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
       .map((noteKey) => ({ noteKey, state: this.syncState(noteKey) }))
       .filter((p) => p.state && p.state.lastModified && !this.busy.has(p.noteKey) && this.app.vault.getFileByPath(p.noteKey))
       .map((p) => ({ noteKey: p.noteKey, pageId: p.state!.pageId, lastModified: this.dismissed.get(p.noteKey) ?? p.state!.lastModified }));
+    for (const [noteKey, link] of Object.entries(this.settings.oneNoteCanvasSync)) {
+      if (link.lastModified && !this.busy.has(noteKey) && this.app.vault.getFileByPath(noteKey)) {
+        pages.push({ noteKey, pageId: link.pageId, lastModified: link.lastModified });
+      }
+    }
     if (pages.length) this.send({ type: "onenote-poll", poll: { pages } });
   }
 
@@ -780,7 +802,9 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
 
   private flushPush(path: string) {
     if (!this.pendingPush.has(path) || this.busy.has(path)) return;
-    if (this.activeNote()?.file?.path !== path) return;
+    // (A canvas has no layout to measure: it can go whether it's open or not.)
+    const canvas = path.endsWith(".canvas");
+    if (!canvas && this.activeNote()?.file?.path !== path) return;
     const now = Date.now();
     if ((this.pausedUntil.get(path) ?? 0) > now) return;
     const sends = (this.recentSends.get(path) ?? []).filter((t) => now - t < 60_000);
@@ -795,13 +819,151 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
     sends.push(now);
     this.recentSends.set(path, sends);
     this.pendingPush.delete(path);
-    this.openInOneNote({ navigate: false });
+    if (canvas) void this.sendCanvas(path, false);
+    else this.openInOneNote({ navigate: false });
+  }
+
+  // ---------- canvases and their pages (see helper/OneNoteCanvasSync.cs) ----------
+
+  /** The canvas we ink on, if that's what's in front. */
+  private activeCanvas(): TFile | null {
+    const active = this.activeInkView();
+    return active?.kind === "canvas" ? active.view.file : null;
+  }
+
+  private canvasStatePath(id: string) {
+    const base = this.vaultPath();
+    return base ? path.join(base, this.manifest.dir ?? "", "canvas-sync", `${id}.json`) : "";
+  }
+
+  private newCanvasSyncId() {
+    return Array.from(crypto.getRandomValues(new Uint8Array(8)), (b) => b.toString(16).padStart(2, "0")).join("");
+  }
+
+  /** Bring the canvas's page up to date with it, making the page if it has none yet. */
+  private async sendCanvas(canvasPath: string, navigate: boolean) {
+    const base = this.vaultPath();
+    const file = this.app.vault.getFileByPath(canvasPath);
+    if (!file || !base) return;
+    if (!this.helper) {
+      if (navigate) new Notice("OneNote Ink: the ink helper isn't running");
+      return;
+    }
+    let link = this.settings.oneNoteCanvasSync[canvasPath];
+    if (!link) {
+      // Opened from a page before canvases synced: it has no record of which card is which object, so a
+      // send would put a second copy of everything on that page.
+      if (Object.values(this.settings.oneNoteCanvases).includes(canvasPath)) {
+        if (navigate) new Notice("This canvas was opened before canvases synced with OneNote. Open the page as a canvas again to get one that stays in sync.", 10000);
+        return;
+      }
+      link = { id: this.newCanvasSyncId(), pageId: "", lastModified: "" };
+      this.settings.oneNoteCanvasSync[canvasPath] = link;
+      this.persist();
+    }
+    if (this.busy.has(canvasPath)) return;
+    this.busy.add(canvasPath);
+    this.send({
+      type: "onenote-canvas-send",
+      canvasSend: {
+        canvasPath, navigate,
+        title: file.basename,
+        section: this.settings.oneNoteSection || "Obsidian",
+        inkPath: path.join(base, inkFileFor(canvasPath, "canvas")),
+        statePath: this.canvasStatePath(link.id),
+        origin: CANVAS_ORIGIN,
+        whiteInkToBlack: this.settings.oneNoteWhiteToBlack,
+        nodes: await canvasNodes(this.app, file, base),
+      },
+    });
+    if (navigate) new Notice("Sending to OneNote…");
+  }
+
+  private onCanvasSent(msg: { ok?: boolean; canvasPath: string; pageId?: string; lastModified?: string; navigated?: boolean; navigate?: boolean; pageChanged?: boolean }) {
+    const canvasPath = msg.canvasPath;
+    this.busy.delete(canvasPath);
+    const link = this.settings.oneNoteCanvasSync[canvasPath];
+    if (msg.ok && link) {
+      link.pageId = msg.pageId ?? link.pageId;
+      link.lastModified = msg.lastModified ?? link.lastModified;
+      this.settings.oneNoteCanvases[link.pageId] = canvasPath;
+      this.persist();
+      if (msg.navigated) new Notice("Opened in OneNote");
+    } else if (msg.pageChanged) {
+      // OneNote has edits of its own: bring them in first, then send what's left.
+      this.afterPull.set(canvasPath, () => void this.sendCanvas(canvasPath, !!msg.navigate));
+      void this.pullCanvas(canvasPath, msg.navigate ? "manual" : "auto");
+    }
+  }
+
+  private async pullCanvas(canvasPath: string, origin: "manual" | "auto") {
+    const base = this.vaultPath();
+    const file = this.app.vault.getFileByPath(canvasPath);
+    const link = this.settings.oneNoteCanvasSync[canvasPath];
+    if (!file || !base || !link?.pageId || !this.helper || this.busy.has(canvasPath)) return;
+    this.busy.add(canvasPath);
+    this.send({
+      type: "onenote-canvas-pull",
+      canvasPull: {
+        canvasPath,
+        manual: origin === "manual",
+        inkPath: path.join(base, inkFileFor(canvasPath, "canvas")),
+        statePath: this.canvasStatePath(link.id),
+        origin: CANVAS_ORIGIN,
+        nodes: await canvasNodes(this.app, file, base),
+      },
+    });
+    if (origin === "manual") new Notice("Pulling from OneNote…");
+  }
+
+  private async onCanvasPulled(msg: { canvasPath: string; manual?: boolean; changes?: CardChange[]; tempDir?: string; strokesIn?: number; strokesOut?: number; lastModified?: string }) {
+    const canvasPath = msg.canvasPath;
+    this.busy.delete(canvasPath);
+    const file = this.app.vault.getFileByPath(canvasPath);
+    const link = this.settings.oneNoteCanvasSync[canvasPath];
+    if (!file || !link) return;
+    // Our own writes aren't edits to send back.
+    this.quietUntil.set(canvasPath, Date.now() + 5000);
+    let changes = msg.changes ?? [];
+    const finish = async (apply: CardChange[]) => {
+      try {
+        await applyCardChanges(this.app, file, apply);
+      } catch (e) {
+        new Notice(`Couldn't update ${file.basename} from OneNote: ${e instanceof Error ? e.message : String(e)}`);
+      } finally {
+        try {
+          if (msg.tempDir) fs.rmSync(msg.tempDir, { recursive: true, force: true });
+        } catch { /* only a temporary copy */ }
+      }
+      link.lastModified = msg.lastModified ?? link.lastModified;
+      this.persist();
+      const ink = (msg.strokesIn ?? 0) + (msg.strokesOut ?? 0);
+      if (apply.length || ink) new Notice(`OneNote → ${file.basename}: ${[apply.length ? `${apply.length} card${apply.length === 1 ? "" : "s"}` : "", ink ? `${ink} stroke${ink === 1 ? "" : "s"}` : ""].filter(Boolean).join(" and ")} updated.`);
+      else if (msg.manual) new Notice("Already up to date with OneNote.");
+      const next = this.afterPull.get(canvasPath);
+      this.afterPull.delete(canvasPath);
+      if (next) next();
+      else if (this.syncsNote(canvasPath)) {
+        // Whatever the canvas kept (text edited on both sides, a card OneNote no longer has) goes over now.
+        this.pendingPush.add(canvasPath);
+        window.setTimeout(() => this.flushPush(canvasPath), 1500);
+      }
+    };
+    // Taking cards off the canvas is shown first. Kept, they go back on the page with the next send.
+    const removing = changes.filter((c) => c.op === "delete");
+    if (removing.length) {
+      new PullModal(this.app, file.basename, removing.map((c, i) => ({ kind: "deleted", block: i, afterBlock: -1, oldText: c.oldText ?? "", markdown: "" })), (choice) => {
+        void finish(choice === "apply" ? changes : changes.filter((c) => c.op !== "delete"));
+      }).open();
+      return;
+    }
+    await finish(changes);
   }
 
   // ---------- OneNote pages as canvases ----------
 
   private pagesNotice: Notice | null = null;
-  private imports = new Map<number, { pageId: string; canvasPath: string; inkPath: string; notice: Notice }>();
+  private imports = new Map<number, { pageId: string; canvasPath: string; inkPath: string; syncId: string; notice: Notice }>();
   private importId = 0;
 
   /** Pages keep their shape on a canvas, where a note's single column can't hold them. Only reads OneNote. */
@@ -835,14 +997,15 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
     const canvasPath = freeCanvasPath(this.app, folder.path, page.title);
     const inkPath = path.join(base, inkFileFor(canvasPath, "canvas"));
     const id = ++this.importId;
+    const syncId = this.newCanvasSyncId();
     this.imports.set(id, {
-      pageId: page.id, canvasPath, inkPath,
+      pageId: page.id, canvasPath, inkPath, syncId,
       notice: new Notice(`Reading "${page.title || "Untitled page"}" from OneNote. A page with a lot of ink can take a minute or two.`, 0),
     });
-    this.send({ type: "onenote-import", import: { id, pageId: page.id, inkPath, origin: CANVAS_ORIGIN } });
+    this.send({ type: "onenote-import", import: { id, pageId: page.id, inkPath, origin: CANVAS_ORIGIN, statePath: this.canvasStatePath(syncId) } });
   }
 
-  private async onOneNotePageRead(msg: { ok?: boolean; id?: number; error?: string; title?: string; cards?: ImportCard[]; strokes?: number; tempDir?: string }) {
+  private async onOneNotePageRead(msg: { ok?: boolean; id?: number; error?: string; title?: string; cards?: ImportCard[]; strokes?: number; tempDir?: string; lastModified?: string }) {
     const job = this.imports.get(msg.id ?? -1);
     if (!job) return;
     this.imports.delete(msg.id!);
@@ -851,13 +1014,17 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
       if (!msg.ok) throw new Error(msg.error ?? "unknown error");
       const file = await writeCanvas(this.app, job.canvasPath, msg.title ?? "", msg.cards ?? []);
       this.settings.oneNoteCanvases[job.pageId] = file.path;
+      this.settings.oneNoteCanvasSync[file.path] = { id: job.syncId, pageId: job.pageId, lastModified: msg.lastModified ?? "" };
+      this.quietUntil.set(file.path, Date.now() + 5000);
       this.persist();
       await this.app.workspace.getLeaf("tab").openFile(file);
       const hidden = this.ignoreFor(file).toolbar ? " Its folder isn't one your ink settings cover, so it has no ink tools there." : "";
-      new Notice(`Opened as ${file.path}: ${msg.cards?.length ?? 0} cards, ${msg.strokes ?? 0} strokes. The OneNote page isn't changed.${hidden}`, 8000);
+      const synced = this.autoSync() ? "Changes on either side now sync." : "Send or pull changes from the toolbar.";
+      new Notice(`Opened as ${file.path}: ${msg.cards?.length ?? 0} cards, ${msg.strokes ?? 0} strokes. ${synced}${hidden}`, 8000);
     } catch (e) {
       // No canvas came of it, so none of its ink either.
       fs.rmSync(job.inkPath, { force: true });
+      fs.rmSync(this.canvasStatePath(job.syncId), { force: true });
       new Notice(`Couldn't open the page as a canvas: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       try {
@@ -883,6 +1050,12 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
         const adapter = this.app.vault.adapter;
         if (await adapter.exists(from) && !(await adapter.exists(to))) await adapter.rename(from, to);
       })();
+    }
+    const link = this.settings.oneNoteCanvasSync[oldPath];
+    if (link) {
+      this.settings.oneNoteCanvasSync[file.path] = link;
+      delete this.settings.oneNoteCanvasSync[oldPath];
+      this.persist();
     }
     for (const [pageId, canvas] of Object.entries(this.settings.oneNoteCanvases)) {
       if (canvas === oldPath) {
@@ -1237,7 +1410,9 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
     const base = this.vaultPath();
     if (!base) return;
     // Only notes sync with OneNote (a PDF's ink is `file.pdf.ink`).
-    const rel = path.relative(base, inkFile).split(path.sep).join("/").replace(/\.ink$/i, ".md");
+    const inkRel = path.relative(base, inkFile).split(path.sep).join("/");
+    // A canvas's ink is `file.canvas.ink`.
+    const rel = /\.canvas\.ink$/i.test(inkRel) ? inkRel.replace(/\.ink$/i, "") : inkRel.replace(/\.ink$/i, ".md");
     if (this.app.vault.getFileByPath(rel)) this.markDirty(rel);
   }
 
@@ -1262,6 +1437,11 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
    * helper refuses unless `force`: background sends pull them first, a manual send asks.
    */
   openInOneNote(opts: { force?: boolean; navigate?: boolean } = {}) {
+    const canvas = this.activeCanvas();
+    if (canvas) {
+      void this.sendCanvas(canvas.path, opts.navigate ?? true);
+      return;
+    }
     const view = this.activeNote();
     const base = this.vaultPath();
     if (!view?.file || !base) return;
@@ -1364,6 +1544,12 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
   /** Bring edits made in OneNote back: ink straight away; text applied (background) or shown first (manual). */
   pullFromOneNote(notePath?: string, origin: "manual" | "auto" = "manual") {
     const base = this.vaultPath();
+    const canvas = notePath ? (notePath.endsWith(".canvas") ? notePath : null) : this.activeCanvas()?.path;
+    if (canvas) {
+      if (this.settings.oneNoteCanvasSync[canvas]?.pageId) void this.pullCanvas(canvas, origin);
+      else if (origin === "manual") new Notice("Send this canvas to OneNote first (Open in OneNote); then its OneNote edits can be pulled back.");
+      return;
+    }
     const path = notePath ?? this.activeNote()?.file?.path;
     if (!path || !base) return;
     const state = this.syncState(path);

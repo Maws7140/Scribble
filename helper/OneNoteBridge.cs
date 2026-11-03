@@ -128,6 +128,81 @@ public sealed partial class OverlayWindow
         }, req.NoteKey);
     }
 
+    /// <summary>Bring a canvas's page up to date with it (see OneNoteCanvasSync).</summary>
+    void SendCanvas(CanvasSendRequest? req)
+    {
+        if (req == null) return;
+        if (req.InkPath == inkPath) { edited = false; dirty = true; FlushSave(); }
+        RunOneNote(() =>
+        {
+            try
+            {
+                var state = OneNoteCanvasSync.Send(req);
+                if (req.Navigate) OneNoteExport.Open(state.PageId);
+                Protocol.Log($"OneNote: sent canvas \"{req.Title}\" ({state.Cards.Count} cards, {state.Strokes.Count} strokes){(req.Navigate ? "" : " in the background")}");
+                Protocol.Send(new { type = "onenote-canvas-sent", ok = true, canvasPath = req.CanvasPath, pageId = state.PageId, lastModified = state.LastModified, navigated = req.Navigate });
+            }
+            catch (CanvasPageChangedException)
+            {
+                Protocol.Send(new { type = "onenote-canvas-sent", ok = false, pageChanged = true, canvasPath = req.CanvasPath, navigate = req.Navigate });
+            }
+        }, req.CanvasPath, background: !req.Navigate, retryNow: false);
+    }
+
+    /// <summary>Bring a page's edits to its canvas: ink straight away, the cards through the plugin.</summary>
+    void PullCanvas(CanvasPullRequest? req)
+    {
+        if (req == null) return;
+        if (req.InkPath == inkPath) { dirty = true; FlushSave(); }
+        RunOneNote(() =>
+        {
+            var r = OneNoteCanvasSync.Pull(req);
+            if (r.RemoveStrokes.Count > 0 || r.AddStrokes.Count > 0) Dispatcher.Invoke(() => MergeInk(req.InkPath, r.RemoveStrokes, r.AddStrokes));
+            if (r.KeptInk) Protocol.Send(new { type = "notice", message = "The OneNote page has no ink, so the canvas's ink was kept. Erase it here if that's what you meant." });
+            // Only now: if anything above failed, the next pull finds the same changes again.
+            OneNoteCanvasSync.Save(req.StatePath, r.State);
+            Protocol.Log($"OneNote: pulled canvas \"{req.CanvasPath}\": {r.Changes.Count} card changes, {r.AddStrokes.Count} strokes in, {r.RemoveStrokes.Count} out");
+            Protocol.Send(new
+            {
+                type = "onenote-canvas-pulled", canvasPath = req.CanvasPath, manual = req.Manual, changes = r.Changes, tempDir = r.TempDir,
+                strokesIn = r.AddStrokes.Count, strokesOut = r.RemoveStrokes.Count, lastModified = r.State.LastModified,
+            });
+        }, req.CanvasPath);
+    }
+
+    /// <summary>Take some strokes out of a canvas's ink and put others in, keeping everything else as it is.</summary>
+    internal void MergeInk(string path, HashSet<string> remove, StrokeCollection add)
+    {
+        add = WithoutDuplicates(add);
+        BackUpInk(path);
+        if (path != inkPath)
+        {
+            var file = OneNoteExport.LoadInk(path);
+            var left = new StrokeCollection(file.Where(s => !remove.Contains(OneNoteCanvasSync.StrokeKey(s))));
+            left.Add(add);
+            var tmp = path + ".tmp";
+            using (var fs = File.Create(tmp)) left.Save(fs, true);
+            File.Move(tmp, path, overwrite: true);
+            return;
+        }
+        ToDisplay(add);
+        Pens.Stylize(add);
+        importing = true;
+        try
+        {
+            var gone = new StrokeCollection(ink.Strokes.Where(s => remove.Contains(OneNoteCanvasSync.StrokeKey(s))));
+            if (ink.GetSelectedStrokes().Intersect(gone).Any()) ClearSelection();
+            if (gone.Count > 0) ink.Strokes.Remove(gone);
+            if (add.Count > 0) ink.Strokes.Add(add);
+        }
+        finally { importing = false; }
+        AnchorLegacy(add.ToList());
+        if (papers != null) ShowOnCards(add);
+        edited = false; // this came from OneNote; nothing to send back
+        FlushSave();
+        SendExtent();
+    }
+
     /// <summary>The pages to choose from, for opening one as a canvas.</summary>
     void ListOneNotePages()
     {
@@ -151,7 +226,7 @@ public sealed partial class OverlayWindow
                 var watch = System.Diagnostics.Stopwatch.StartNew();
                 var r = OneNoteImport.Read(OneNote.Connect(), req);
                 Protocol.Log($"OneNote: read a page for a canvas: {r.Cards.Count} cards, {r.Strokes} strokes, {watch.ElapsedMilliseconds} ms");
-                Protocol.Send(new { type = "onenote-imported", ok = true, id = req.Id, title = r.Title, cards = r.Cards, strokes = r.Strokes, tempDir = r.TempDir });
+                Protocol.Send(new { type = "onenote-imported", ok = true, id = req.Id, title = r.Title, cards = r.Cards, strokes = r.Strokes, tempDir = r.TempDir, lastModified = OneNoteCanvasSync.Load(req.StatePath)?.LastModified });
             }
             catch (Exception e) when (!Unreachable(e)) { Protocol.Log("OneNote import: " + e); Failed(e.Message); }
         }, null, unreachable: () => Failed("OneNote isn't responding right now (it may be starting, updating or closed)."));

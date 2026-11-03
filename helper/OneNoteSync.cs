@@ -114,7 +114,7 @@ public static class OneNoteSync
         catch (System.Runtime.InteropServices.COMException) { return false; }
     }
 
-    static StrokeCollection? InkData(IOneNoteApplication app, string pageId, XElement e)
+    internal static StrokeCollection? InkData(IOneNoteApplication app, string pageId, XElement e)
     {
         var cb = e.Element(one + "CallbackID")?.Attribute("callbackID")?.Value;
         string b64;

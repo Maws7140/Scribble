@@ -134,14 +134,14 @@ public static class OneNoteExport
 
     static string F(double v) => v.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
 
-    static StrokeCollection LoadInk(string? path)
+    internal static StrokeCollection LoadInk(string? path)
     {
         if (path == null || !File.Exists(path)) return new StrokeCollection();
         using var fs = OverlayWindow.OpenInk(path);
         return new StrokeCollection(fs); // the saved file has the true colours (no dark-mode flip)
     }
 
-    static string EnsureSection(IOneNoteApplication app, string name)
+    internal static string EnsureSection(IOneNoteApplication app, string name)
     {
         var doc = OneNote.Hierarchy(app, "", OneNote.HsSections);
         var existing = doc.Descendants(one + "Section").FirstOrDefault(s => s.Attribute("name")?.Value == name
@@ -164,7 +164,7 @@ public static class OneNoteExport
     }
 
     /// <summary>Near-white ink (written white for a dark theme) becomes black: OneNote shows black ink white in dark mode.</summary>
-    static void WhiteToBlack(StrokeCollection strokes)
+    internal static void WhiteToBlack(StrokeCollection strokes)
     {
         foreach (var s in strokes)
         {
@@ -182,7 +182,7 @@ public static class OneNoteExport
     /// colour's transparency: highlighters go over half see-through. A pull turns them back (see
     /// <see cref="HighlightersFromOneNote"/>).
     /// </summary>
-    static void SeeThroughHighlighters(StrokeCollection strokes)
+    internal static void SeeThroughHighlighters(StrokeCollection strokes)
     {
         foreach (var s in strokes)
         {
@@ -209,7 +209,7 @@ public static class OneNoteExport
         }
     }
 
-    static string NewPage(IOneNoteApplication app, string sectionId)
+    internal static string NewPage(IOneNoteApplication app, string sectionId)
     {
         app.CreateNewPage(sectionId, out var pageId, 1 /* npsBlankPageWithTitle */);
         return pageId;
@@ -226,7 +226,7 @@ public static class OneNoteExport
 
     // ---------- Markdown block -> OneNote paragraphs ----------
 
-    static List<XElement> BlockToOEs(ExportBlock block, ref bool usesTodo)
+    internal static List<XElement> BlockToOEs(ExportBlock block, ref bool usesTodo)
     {
         var lines = block.Text.Replace("\r", "").Split('\n').ToList();
         var oes = new List<XElement>();

@@ -19,6 +19,8 @@ export interface ImportCard {
   markdown?: string;
   file?: string;
   name?: string;
+  /** Its card on the canvas. */
+  nodeId?: string;
 }
 
 export class PagePicker extends FuzzySuggestModal<OneNotePage> {
@@ -55,23 +57,24 @@ export function freeCanvasPath(app: App, folder: string, title: string) {
 
 const cardId = () => Array.from(crypto.getRandomValues(new Uint8Array(8)), (b) => b.toString(16).padStart(2, "0")).join("");
 
-/** Put the page's pictures and files in the vault (where it keeps attachments) and write the canvas. */
+/** A card for the canvas. Its picture or file goes in the vault, where it keeps attachments. */
+export async function cardNode(app: App, canvasPath: string, title: string, card: ImportCard, number: number): Promise<object> {
+  const id = card.nodeId || cardId();
+  const place = { x: Math.round(card.x), y: Math.round(card.y), width: Math.round(card.w), height: Math.round(card.h) };
+  if (!card.file) return { id, type: "text", text: card.markdown ?? "", ...place };
+  const name = card.kind === "image" ? `${canvasName(title)} ${number}${card.file.slice(card.file.lastIndexOf("."))}` : card.name ?? "attachment";
+  const target = await app.fileManager.getAvailablePathForAttachment(name, canvasPath);
+  const bytes = fs.readFileSync(card.file);
+  const saved = await app.vault.createBinary(target, bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer);
+  // A picture is on the page; an attached file is only a link to it, as in OneNote.
+  if (card.kind === "image") return { id, type: "file", file: saved.path, ...place };
+  return { id, type: "text", text: `[[${saved.path}|${card.name ?? saved.name}]]`, ...place };
+}
+
+/** Put the page's pictures and files in the vault and write the canvas. */
 export async function writeCanvas(app: App, canvasPath: string, title: string, cards: ImportCard[]): Promise<TFile> {
   const nodes: object[] = [];
   let pictures = 0;
-  for (const card of cards) {
-    const place = { x: Math.round(card.x), y: Math.round(card.y), width: Math.round(card.w), height: Math.round(card.h) };
-    if (card.file) {
-      const name = card.kind === "image" ? `${canvasName(title)} ${++pictures}${card.file.slice(card.file.lastIndexOf("."))}` : card.name ?? "attachment";
-      const target = await app.fileManager.getAvailablePathForAttachment(name, canvasPath);
-      const bytes = fs.readFileSync(card.file);
-      const saved = await app.vault.createBinary(target, bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer);
-      // A picture is on the page; an attached file is only a link to it, as in OneNote.
-      if (card.kind === "image") nodes.push({ id: cardId(), type: "file", file: saved.path, ...place });
-      else nodes.push({ id: cardId(), type: "text", text: `[[${saved.path}|${card.name ?? saved.name}]]`, ...place });
-    } else {
-      nodes.push({ id: cardId(), type: "text", text: card.markdown ?? "", ...place });
-    }
-  }
+  for (const card of cards) nodes.push(await cardNode(app, canvasPath, title, card, card.kind === "image" ? ++pictures : 0));
   return app.vault.create(canvasPath, JSON.stringify({ nodes, edges: [] }, null, "\t"));
 }

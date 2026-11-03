@@ -165,7 +165,7 @@ export class Toolbar {
 
     // Page and layer toggles sit on the right.
     const right = this.el.createDiv({ cls: "oni-right" });
-    if (this.host.inkKind() === "markdown") {
+    if (this.host.inkKind() === "markdown" || this.host.inkKind() === "canvas") {
       const oneNote = this.button("book-open", "OneNote", () => {
         const menu = new Menu();
         menu.addItem((i) => i.setTitle("Open in OneNote").setIcon("book-open").onClick(() => this.host.openInOneNote()));
@@ -173,6 +173,8 @@ export class Toolbar {
         const r = oneNote.getBoundingClientRect();
         menu.showAtPosition({ x: r.left, y: r.bottom + 4 });
       }, right, "onenote");
+    }
+    if (this.host.inkKind() === "markdown") {
       const lines = this.button("align-justify", "Rule and grid lines", () => {
         const menu = new Menu();
         menu.addItem((i) => i.setTitle("No lines").setChecked(s.pageLines === "none").onClick(() => { s.pageLines = "none"; this.host.save(); }));

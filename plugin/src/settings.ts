@@ -93,6 +93,12 @@ export interface InkSettings {
   oneNotePages: Record<string, string | import("./onenote").SyncState>;
   /** OneNote pages opened as canvases: page ID to the canvas's path. */
   oneNoteCanvases: Record<string, string>;
+  /**
+   * Canvases kept in sync with a page, by path: `id` names the file with what the two last agreed
+   * (canvas-sync/, too big for these settings: a real page has about 1,100 drawings), `lastModified` is
+   * the page's fingerprint then, for the cheap "did OneNote change it?" check.
+   */
+  oneNoteCanvasSync: Record<string, { id: string; pageId: string; lastModified: string }>;
   /** Math Assistant: angle unit for trig, and whether to show complex solutions. */
   mathAngle: "rad" | "deg" | "grad";
   /** Draw ink with the GPU (smoother on some machines, ~100 MB more memory); off: software rendering. */
@@ -162,6 +168,7 @@ export const DEFAULT_SETTINGS: InkSettings = {
   oneNoteConfirmText: false,
   oneNotePages: {},
   oneNoteCanvases: {},
+  oneNoteCanvasSync: {},
   mathAngle: "rad",
   gpuRendering: false,
   mathNumbers: "real",

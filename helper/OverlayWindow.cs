@@ -208,6 +208,12 @@ public sealed partial class OverlayWindow : Window
             case "onenote-pull":
                 PullFromOneNote(cmd.Pull);
                 break;
+            case "onenote-canvas-send":
+                SendCanvas(cmd.CanvasSend);
+                break;
+            case "onenote-canvas-pull":
+                PullCanvas(cmd.CanvasPull);
+                break;
             case "onenote-poll":
                 PollOneNote(cmd.Poll);
                 break;

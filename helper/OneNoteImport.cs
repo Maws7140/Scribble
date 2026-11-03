@@ -15,6 +15,7 @@ public sealed class ImportRequest
     public string PageId { get; set; } = "";
     public string InkPath { get; set; } = "";     // where the canvas's ink goes
     public double Origin { get; set; }            // ink units on a canvas are canvas px + this (see targets.ts)
+    public string StatePath { get; set; } = "";   // where the sync keeps what the two last agreed (see OneNoteCanvasSync)
 }
 
 public sealed class ImportCard
@@ -27,6 +28,14 @@ public sealed class ImportCard
     public string? Markdown { get; set; }         // text
     public string? File { get; set; }             // image, file: a temporary copy for the plugin to take
     public string? Name { get; set; }             // what to call it
+    public string NodeId { get; set; } = "";      // its card on the canvas
+    public string ObjectId { get; set; } = "";    // its object on the page ("title": the page's title)
+    public bool Inside { get; set; }              // inside a text box, with no position of its own
+    public string Hash { get; set; } = "";
+    public double PageX { get; set; }             // on the page (pt)
+    public double PageY { get; set; }
+    public double PageW { get; set; }
+    public double PageH { get; set; }
 }
 
 public sealed class OneNotePageInfo
@@ -72,93 +81,23 @@ public static class OneNoteImport
     internal static Result Read(IOneNoteApplication app, ImportRequest req)
     {
         app.GetPageContent(req.PageId, out var xml, 1 /* piBinaryData */, OneNote.Xs2013);
-        var page = XDocument.Parse(xml);
-        var root = page.Root!;
+        var root = XDocument.Parse(xml).Root!;
         var temp = Path.Combine(Path.GetTempPath(), "onenote-ink-import-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(temp);
 
         var title = root.Attribute("name")?.Value ?? "";
-        var cards = new List<ImportCard>();
-        int number = 0;
-        string Save(byte[] bytes, string ext)
-        {
-            var path = Path.Combine(temp, $"{++number}{ext}");
-            File.WriteAllBytes(path, bytes);
-            return path;
-        }
-        ImportCard? Picture(XElement image, double x, double y)
-        {
-            var data = image.Element(one + "Data")?.Value;
-            if (string.IsNullOrEmpty(data)) return null;
-            var bytes = Convert.FromBase64String(data);
-            var size = image.Element(one + "Size");
-            return new ImportCard
-            {
-                Kind = "image", X = x * PxPerPt, Y = y * PxPerPt,
-                W = Num(size?.Attribute("width"), 100) * PxPerPt, H = Num(size?.Attribute("height"), 100) * PxPerPt,
-                File = Save(bytes, PictureType(bytes)), Name = "image",
-            };
-        }
-        ImportCard? Attached(XElement file, double x, double y)
-        {
-            var cache = file.Attribute("pathCache")?.Value;
-            var name = file.Attribute("preferredName")?.Value ?? "attachment";
-            // Small, as OneNote shows it: a printout's pages often lie under it, and it mustn't cover them.
-            var card = new ImportCard { X = x * PxPerPt, Y = y * PxPerPt, W = 320, H = 60, Name = name };
-            if (cache != null && File.Exists(cache))
-            {
-                card.Kind = "file";
-                card.File = Path.Combine(temp, $"{++number}{Path.GetExtension(name)}");
-                File.Copy(cache, card.File);
-                File.SetAttributes(card.File, FileAttributes.Normal); // OneNote's cached copies are read-only
-                return card;
-            }
-            // Not on this machine: say so where it was, rather than leave a gap.
-            card.Markdown = $"Attached in OneNote: {name}";
-            return card;
-        }
+        var cards = BuildCards(root, temp);
 
-        // Pictures first, so they lie under the text and the ink over them.
-        foreach (var image in root.Elements(one + "Image"))
+        // The ink, in canvas px, each stroke knowing which drawing it's from.
+        var drawn = OneNoteCanvasSync.PageInk(app, req.PageId, root);
+        var from = new Dictionary<Stroke, string>();
+        var all = new StrokeCollection();
+        foreach (var (id, _, each) in drawn)
         {
-            var pos = image.Element(one + "Position");
-            if (Picture(image, Num(pos?.Attribute("x")), Num(pos?.Attribute("y"))) is { } card) cards.Add(card);
+            foreach (var s in each) from[s] = id;
+            all.Add(each);
         }
-        foreach (var file in root.Elements(one + "InsertedFile"))
-        {
-            var pos = file.Element(one + "Position");
-            if (Attached(file, Num(pos?.Attribute("x")), Num(pos?.Attribute("y"))) is { } card) cards.Add(card);
-        }
-        if (title.Trim().Length > 0)
-            cards.Add(TextCard("# " + title, 36, 24, 500, 30));
-        foreach (var outline in root.Elements(one + "Outline"))
-        {
-            var pos = outline.Element(one + "Position");
-            var size = outline.Element(one + "Size");
-            double x = Num(pos?.Attribute("x")), y = Num(pos?.Attribute("y"));
-            double w = Num(size?.Attribute("width"), 300), h = Num(size?.Attribute("height"), 14);
-            var markdown = OneNoteToMarkdown.Convert(outline);
-            // Pictures and files inside a text box have no place of their own: in order, under its text.
-            var inside = outline.Descendants().Where(e => e.Name == one + "Image" || e.Name == one + "InsertedFile").ToList();
-            double below = y;
-            if (markdown.Trim().Length > 0)
-            {
-                double textHeight = inside.Count == 0 ? h : markdown.Split('\n').Length * 18;
-                cards.Add(TextCard(markdown, x, y, w, textHeight));
-                below += textHeight;
-            }
-            foreach (var e in inside)
-            {
-                var card = e.Name == one + "Image" ? Picture(e, x, below) : Attached(e, x, below);
-                if (card == null) continue;
-                cards.Add(card);
-                below += card.H / PxPerPt;
-            }
-        }
-
-        // The ink, in canvas px: the same reading as a pull, with the page's own 0,0 as the canvas's.
-        var (ink, _, _) = OneNoteSync.ReadInk(app, req.PageId, page, OneNoteSync.PageOrigin);
-        var strokes = OverlayWindow.WithoutDuplicates(ink);
+        var strokes = OverlayWindow.WithoutDuplicates(all);
 
         // A very long page: centre it, so all of it is inside the ink layer.
         double left = cards.Count > 0 ? cards.Min(c => c.X) : 0, top = cards.Count > 0 ? cards.Min(c => c.Y) : 0;
@@ -179,15 +118,147 @@ public static class OneNoteImport
             using (var fs = File.Create(tmp)) strokes.Save(fs, true);
             File.Move(tmp, req.InkPath, overwrite: true);
         }
+        if (req.StatePath.Length > 0)
+        {
+            var state = new CanvasSyncState { PageId = req.PageId, Dx = dx, Dy = dy };
+            foreach (var c in cards)
+            {
+                state.Cards.Add(new CanvasSyncCard
+                {
+                    NodeId = c.NodeId, ObjectId = c.ObjectId, Kind = c.ObjectId == "title" ? "title" : c.Kind, Inside = c.Inside, Hash = c.Hash,
+                    Text = c.Markdown ?? "", X = c.X, Y = c.Y, W = c.W, H = c.H, PageX = c.PageX, PageY = c.PageY, PageW = c.PageW, PageH = c.PageH,
+                });
+            }
+            foreach (var (id, sig, _) in drawn) if (sig.Length > 0) state.Drawings[id] = sig;
+            foreach (var s in strokes) state.Strokes[OneNoteCanvasSync.StrokeKey(s)] = from[s];
+            state.LastModified = OneNoteSync.LastModified(app, req.PageId);
+            OneNoteCanvasSync.Save(req.StatePath, state);
+        }
         return new Result(title, cards, strokes.Count, temp);
     }
+
+    /// <summary>
+    /// The page's objects as cards, with canvas positions as if the page's 0,0 were the canvas's. `temp`: where to
+    /// put pictures and files for the plugin to take; without one, they're only described (nothing new to take).
+    /// </summary>
+    internal static List<ImportCard> BuildCards(XElement root, string? temp)
+    {
+        var title = root.Attribute("name")?.Value ?? "";
+        var cards = new List<ImportCard>();
+        int number = 0;
+        static string NewNodeId() => Guid.NewGuid().ToString("N")[..16];
+        string Save(byte[] bytes, string ext)
+        {
+            var path = Path.Combine(temp!, $"{++number}{ext}");
+            File.WriteAllBytes(path, bytes);
+            return path;
+        }
+        ImportCard? Picture(XElement image, double x, double y, bool inside)
+        {
+            var size = image.Element(one + "Size");
+            double w = Num(size?.Attribute("width"), 100), h = Num(size?.Attribute("height"), 100);
+            var card = new ImportCard
+            {
+                Kind = "image", X = x * PxPerPt, Y = y * PxPerPt, W = w * PxPerPt, H = h * PxPerPt, Name = "image",
+                NodeId = NewNodeId(), ObjectId = ObjectIdOf(image), Inside = inside, PageX = x, PageY = y, PageW = w, PageH = h,
+            };
+            var data = image.Element(one + "Data")?.Value;
+            if (temp != null && !string.IsNullOrEmpty(data))
+            {
+                var bytes = Convert.FromBase64String(data);
+                card.File = Save(bytes, PictureType(bytes));
+            }
+            else if (temp != null && string.IsNullOrEmpty(data)) return null;
+            return card;
+        }
+        ImportCard Attached(XElement file, double x, double y, bool inside)
+        {
+            var cache = file.Attribute("pathCache")?.Value;
+            var name = file.Attribute("preferredName")?.Value ?? "attachment";
+            // Small, as OneNote shows it: a printout's pages often lie under it, and it mustn't cover them.
+            var card = new ImportCard
+            {
+                Kind = "file", X = x * PxPerPt, Y = y * PxPerPt, W = 320, H = 60, Name = name,
+                NodeId = NewNodeId(), ObjectId = ObjectIdOf(file), Inside = inside, PageX = x, PageY = y,
+            };
+            if (temp != null && cache != null && File.Exists(cache))
+            {
+                card.File = Path.Combine(temp, $"{++number}{Path.GetExtension(name)}");
+                File.Copy(cache, card.File);
+                File.SetAttributes(card.File, FileAttributes.Normal); // OneNote's cached copies are read-only
+                return card;
+            }
+            // Not on this machine: say so where it was, rather than leave a gap.
+            card.Markdown = $"Attached in OneNote: {name}";
+            return card;
+        }
+
+        // Pictures first, so they lie under the text and the ink over them.
+        foreach (var image in root.Elements(one + "Image"))
+        {
+            var pos = image.Element(one + "Position");
+            if (Picture(image, Num(pos?.Attribute("x")), Num(pos?.Attribute("y")), false) is { } card) cards.Add(card);
+        }
+        foreach (var file in root.Elements(one + "InsertedFile"))
+        {
+            var pos = file.Element(one + "Position");
+            cards.Add(Attached(file, Num(pos?.Attribute("x")), Num(pos?.Attribute("y")), false));
+        }
+        if (title.Trim().Length > 0)
+        {
+            var card = TextCard("# " + title, 36, 24, 500, 30);
+            card.NodeId = NewNodeId();
+            card.ObjectId = "title";
+            card.Hash = title;
+            cards.Add(card);
+        }
+        foreach (var outline in root.Elements(one + "Outline"))
+        {
+            var pos = outline.Element(one + "Position");
+            var size = outline.Element(one + "Size");
+            double x = Num(pos?.Attribute("x")), y = Num(pos?.Attribute("y"));
+            double w = Num(size?.Attribute("width"), 300), h = Num(size?.Attribute("height"), 14);
+            var markdown = OneNoteToMarkdown.Convert(outline);
+            // Pictures and files inside a text box have no place of their own: in order, under its text.
+            var inside = outline.Descendants().Where(e => e.Name == one + "Image" || e.Name == one + "InsertedFile").ToList();
+            double below = y;
+            if (markdown.Trim().Length > 0)
+            {
+                double textHeight = inside.Count == 0 ? h : markdown.Split('\n').Length * 18;
+                var card = TextCard(markdown, x, y, w, textHeight);
+                card.NodeId = NewNodeId();
+                card.ObjectId = outline.Attribute("objectID")?.Value ?? "";
+                card.Hash = OneNoteToMarkdown.Fingerprint(outline);
+                card.PageX = x;
+                card.PageY = y;
+                card.PageW = w;
+                card.PageH = h;
+                cards.Add(card);
+                below += textHeight;
+            }
+            foreach (var e in inside)
+            {
+                var card = e.Name == one + "Image" ? Picture(e, x, below, true) : Attached(e, x, below, true);
+                if (card == null) continue;
+                cards.Add(card);
+                below += card.H / PxPerPt;
+            }
+        }
+        return cards;
+    }
+
+    /// <summary>A picture inside a text box has no ID of its own: its paragraph's.</summary>
+    internal static string ObjectIdOf(XElement e) => e.Attribute("objectID")?.Value ?? e.Parent?.Attribute("objectID")?.Value ?? "";
+
+    /// <summary>How far a card pads its text.</summary>
+    internal const double CardPadX = 24, CardPadY = 12;
 
     /// <summary>A text box as a card: the text where it was, so handwriting beside it stays beside it (a card pads its text).</summary>
     static ImportCard TextCard(string markdown, double x, double y, double w, double h) => new()
     {
         Kind = "text", Markdown = markdown,
-        X = x * PxPerPt - 24, Y = y * PxPerPt - 12,
-        W = w * PxPerPt + 48,
+        X = x * PxPerPt - CardPadX, Y = y * PxPerPt - CardPadY,
+        W = w * PxPerPt + 2 * CardPadX,
         // Taller than OneNote's own: Obsidian's text is bigger, and a card that's too short only scrolls.
         H = Math.Max(60, h * PxPerPt * 1.3 + 24),
     };

@@ -74,6 +74,9 @@ public sealed class Command
     public ExportRequest? Export { get; set; }
     // "onenote-pull": bring OneNote edits back.
     public PullRequest? Pull { get; set; }
+    // "onenote-canvas-send", "onenote-canvas-pull": a canvas and its page (see OneNoteCanvasSync).
+    public CanvasSendRequest? CanvasSend { get; set; }
+    public CanvasPullRequest? CanvasPull { get; set; }
     // "onenote-import": read a page for a canvas; "onenote-pages": list the pages to choose from.
     public ImportRequest? Import { get; set; }
     // "onenote-poll": background sync's check for OneNote edits; "onenote-open": just show a page.
