@@ -183,7 +183,8 @@ export const DEFAULT_SETTINGS: InkSettings = {
  * What a file goes without, from the ignore rules: its folder, its tags (with `#`, frontmatter ones
  * included) and its ignore property (`undefined` when it has none). The property wins: a list names
  * exactly what to hide, true hides the usual, false keeps everything on. Otherwise the folders and tags
- * decide: in "except" mode a listed note goes without, in "only" mode an unlisted one does.
+ * decide: in "except" mode a listed note goes without, in "only" mode an unlisted one does. A canvas is
+ * always somewhere to write, so "only" doesn't take its tools away; listing it under "except" still does.
  */
 export function ignoredFor(path: string, tags: string[], property: unknown,
   s: Pick<InkSettings, "ignoreFolders" | "ignoreTags" | "ignoreHides"> & { ignoreMode?: InkSettings["ignoreMode"] }): Ignored {
@@ -206,7 +207,7 @@ export function ignoredFor(path: string, tags: string[], property: unknown,
   });
   const listed = folder || tagged;
   // "Only" with nothing listed yet means nothing chosen yet, not "no note at all".
-  if (s.ignoreMode === "only") return listed || (!s.ignoreFolders.some((f) => f.trim()) && !wanted.length) ? NOT_IGNORED : { ...s.ignoreHides };
+  if (s.ignoreMode === "only") return listed || /\.canvas$/i.test(path) || (!s.ignoreFolders.some((f) => f.trim()) && !wanted.length) ? NOT_IGNORED : { ...s.ignoreHides };
   return listed ? { ...s.ignoreHides } : NOT_IGNORED;
 }
 
