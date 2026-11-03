@@ -4,7 +4,8 @@ import * as fs from "fs";
 import * as path from "path";
 import { DEFAULT_SETTINGS, DEFAULT_SLOTS, ERASER_SIZES, Ignored, InkSettings, NOT_IGNORED, PAGE_LINES, TOOLBAR_BUTTONS, ignoredFor, isDarkTheme, mmToPx, shownColor } from "./settings";
 import { Toolbar, ToolbarHost } from "./toolbar";
-import { clearBlankSpace, describeLayout, editorOf, lineHashes, lineTops } from "./lines";
+import { LineHold } from "./linehold";
+import { clearBlankSpace, describeLayout, editorOf, forgetHeadingSpace, lineHashes, lineTops } from "./lines";
 import { OverwriteModal, PullModal, SyncState, TextChange, applyTextChanges, noteBlocks, textColumn, withoutEchoes } from "./onenote";
 import { CANVAS_ORIGIN, InkKind, canvasLayout, imageLayout, inkFileFor, inkKindOf, pdfLayout } from "./targets";
 import { HandwritingIndex, HandwritingSearchModal, RecognizedLine, documentFor, insertRecognized, replaceLines } from "./writing";
@@ -43,6 +44,27 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
   private linesMode = "";
   private linesPath = "";
   private linesSeq = 0;
+  private lineHold = new LineHold();
+  /**
+   * The frame a view appears in, and each one it grows in while the line is held: measured before it's painted.
+   * The animation frame has already gone by then, and the next is a long way off while Reading view is building.
+   */
+  private switchWatch = new ResizeObserver(() => {
+    const view = this.activeNote();
+    if (!view || (view.getMode() === this.linesMode && !this.lineHold.holding)) return;
+    this.linesDirty = true;
+    this.sync();
+  });
+  /**
+   * Reading view swapping blocks in and out as you scroll: the browser keeps the text still by correcting the
+   * scroll, so the lines move on the page (by 100 px or more). Measured right away, or the ink is left behind.
+   */
+  private blocksWatch = new MutationObserver(() => {
+    if (this.activeNote()?.getMode() !== "preview") return;
+    this.linesDirty = true;
+    this.sync();
+  });
+  private watchedView: MarkdownView | null = null;
   /** Lowest ink point per note (CSS px from the top of the text column), reported by the helper. */
   private inkBottom = new Map<string, number>();
   /** How far each note's ink reaches left and right of its text column (CSS px), for the page width in split panes. */
@@ -73,6 +95,7 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
     this.registerMarkdownPostProcessor((el, ctx) => this.printing.process(el, ctx), 10000);
     // Switching light/dark changes how neutral pen colours are shown.
     this.registerEvent(this.app.workspace.on("css-change", () => this.toolbar.render()));
+    this.registerEvent(this.app.workspace.on("css-change", () => forgetHeadingSpace()));
     this.addRibbonIcon("pen-tool", "Toggle ink layer", () => this.toggleLayer());
     this.addCommand({ id: "toggle-ink-layer", name: "Toggle ink layer", callback: () => this.toggleLayer() });
     this.addCommand({ id: "toggle-ink-toolbar", name: "Show/hide ink toolbar", callback: () => {
@@ -249,6 +272,11 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
     this.registerDomEvent(document, "pointerover", (e: PointerEvent) => this.onPointer(e), { capture: true });
     // Selected ink and the keyboard, like OneNote: Delete, Esc, Ctrl+C / X / D, arrow keys (Ctrl+V with the lasso).
     this.registerDomEvent(document, "keydown", (e: KeyboardEvent) => this.onInkKey(e), { capture: true });
+    this.register(() => this.switchWatch.disconnect());
+    this.register(() => this.blocksWatch.disconnect());
+    for (const input of ["wheel", "touchstart", "pointerdown", "keydown"] as const) {
+      this.registerDomEvent(document, input, () => this.lineHold.cancel(), { capture: true, passive: true });
+    }
     // A pen-down that Obsidian sees over the ink area went past the ink layer: say where (for the log).
     this.registerDomEvent(document, "pointerdown", (e: PointerEvent) => {
       const r = this.inkArea;
@@ -1662,7 +1690,20 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
       this.send(msg);
     }
 
-    if (inkOn && view && inkPath && sizer instanceof HTMLElement) this.syncLines(view, sizer, inkPath);
+    if (inkOn && view && inkPath && sizer instanceof HTMLElement) {
+      this.syncLines(view, sizer, inkPath);
+      if (this.lineHold.frame(view, sizer, inkPath)) this.linesDirty = true;
+      if (this.watchedView !== view) {
+        this.watchedView = view;
+        this.switchWatch.disconnect();
+        this.blocksWatch.disconnect();
+        const blocks = view.contentEl.querySelector(".markdown-preview-sizer");
+        if (blocks) this.blocksWatch.observe(blocks, { childList: true });
+        const pusher = view.contentEl.querySelector(".markdown-preview-pusher");
+        if (pusher) this.blocksWatch.observe(pusher, { attributes: true, attributeFilter: ["style"] });
+        view.contentEl.querySelectorAll(".markdown-preview-view, .markdown-preview-sizer, .cm-scroller, .cm-sizer").forEach((el) => this.switchWatch.observe(el));
+      }
+    }
   }
 
   private ignoreCache = new Map<string, Ignored>();
@@ -1842,6 +1883,7 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
     const hashes = lineHashes(text.split("\n"));
     if (hashes.length !== layout.tops.length) return; // layout and text out of step; next pass
     const tops = layout.tops.map((t) => Math.round(t * 2) / 2);
+    this.lineHold.measured(mode, tops);
     const blockTops = layout.blockTops?.map((t) => Math.round(t * 2) / 2);
     const key = `${mode}|${inkPath}|${layout.measuredFrom}-${layout.measuredTo}|${tops.join(",")}|${hashes.join(",")}|${blockTops?.join(",") ?? ""}`;
     if (key === this.lastLines) return;

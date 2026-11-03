@@ -17,10 +17,30 @@
 /* Reading view detaches off-screen blocks and sets an inline min-height for the text. Keep the ink's
    writing area as a separate height floor so that detaching the text cannot collapse the scroll range. */
 .markdown-preview-sizer.oni-grow {
-  min-block-size: max(var(--oni-preview-height, 0px), var(--oni-ink-height, 0px)) !important;
+  min-block-size: max(var(--oni-preview-height, 0px), var(--oni-ink-height, 0px), var(--oni-hold-height, 0px)) !important;
 }
 .markdown-preview-sizer.oni-grow::after {
   content: none;
+}
+
+/* A note with ink: Reading view spaced as Live Preview is, so the text and ink stay put across a switch. */
+.oni-same-layout .math-block > mjx-container {
+  margin: 0 !important;
+  padding: 1em 0 !important;
+}
+.oni-same-layout > :is(.el-h1, .el-h2, .el-h3, .el-h4, .el-h5, .el-h6) > :is(h1, h2, h3, h4, h5, h6) {
+  padding-top: var(--oni-heading-space, 0px) !important;
+}
+/* A heading with one blank line above it, under another heading (touching ones keep their space). */
+.oni-same-layout > :is(.el-h1, .el-h2, .el-h3, .el-h4, .el-h5, .el-h6) + :is(.el-h1, .el-h2, .el-h3, .el-h4, .el-h5, .el-h6):not([data-oni-tight-above]) > :is(h1, h2, h3, h4, h5, h6) {
+  padding-top: 0 !important;
+}
+/* The space between blocks is the blank lines between them, as the plugin sets it, and nothing else. */
+.oni-same-layout > :not(.mod-header, .mod-footer, .el-hr) > :first-child {
+  margin-top: 0 !important;
+}
+.oni-same-layout > :not(.mod-header, .mod-footer, .el-hr) > :last-child {
+  margin-bottom: 0 !important;
 }
 
 /* Notebook rule lines; pitch and phase follow the body text (set by the plugin). On a kept-width page

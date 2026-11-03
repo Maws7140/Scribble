@@ -156,6 +156,7 @@ function setSpace(el: HTMLElement, top: number, bottom: number) {
  */
 function reserveBlankSpace(view: MarkdownView, r: PreviewRenderer, sizerTop: number, lineHeight: number, on: boolean) {
   const sections = contentSections(r);
+  sameLayout(view, sections, on);
   const count = view.editor?.lineCount() ?? 0;
   // Read every rect first, then write, so one change can't skew the next measurement.
   const plan: { el: HTMLElement; top: number; bottom: number }[] = [];
@@ -194,6 +195,51 @@ function reserveBlankSpace(view: MarkdownView, r: PreviewRenderer, sizerTop: num
     if (top !== px(s.el.style.marginTop) || bottom !== px(s.el.style.paddingBottom) || s.el.style.paddingTop) plan.push({ el: s.el, top, bottom });
   }
   if (plan.length) keepingPlace(view, sections, () => { for (const p of plan) setSpace(p.el, p.top, p.bottom); });
+}
+
+let headingSpace: string | null = null;
+
+/** The theme changed. */
+export function forgetHeadingSpace() {
+  headingSpace = null;
+}
+
+/** The space Live Preview keeps above a heading. Themes set their own (Minimal halves Obsidian's), so ask. */
+function livePreviewHeadingSpace(): string {
+  if (headingSpace !== null) return headingSpace;
+  const host = document.createElement("div");
+  host.className = "markdown-source-view mod-cm6 is-live-preview";
+  host.style.display = "none";
+  const editor = host.appendChild(document.createElement("div"));
+  editor.className = "cm-editor cm-s-obsidian";
+  const content = editor.appendChild(document.createElement("div"));
+  content.className = "cm-content";
+  const line = content.appendChild(document.createElement("div"));
+  line.className = "cm-line HyperMD-header";
+  document.body.appendChild(host);
+  headingSpace = getComputedStyle(line).paddingTop;
+  host.remove();
+  return headingSpace;
+}
+
+/**
+ * Reading view spaces blocks differently from Live Preview, about 500 px over a long note with maths, and the
+ * text and ink have to cross that on every switch. For notes with ink it takes Live Preview's spacing (see
+ * .oni-same-layout in styles.css). A heading right against the block above keeps its space in Live Preview,
+ * which CSS can't tell from the rendered page, so those are marked from their source lines.
+ */
+function sameLayout(view: MarkdownView, sections: PreviewSection[], on: boolean) {
+  const writes: (() => void)[] = [];
+  const sizer = view.contentEl.querySelector<HTMLElement>(".markdown-preview-sizer");
+  if (sizer && sizer.classList.contains("oni-same-layout") !== on) writes.push(() => sizer.classList.toggle("oni-same-layout", on));
+  const space = on ? livePreviewHeadingSpace() : "";
+  if (sizer && sizer.style.getPropertyValue("--oni-heading-space") !== space) writes.push(() => sizer.style.setProperty("--oni-heading-space", space));
+  sections.forEach((s, i) => {
+    const tight = on && i > 0 && s.start.line === sections[i - 1].end.line + 1;
+    if ((s.el.dataset.oniTightAbove === "1") === tight) return;
+    writes.push(() => { if (tight) s.el.dataset.oniTightAbove = "1"; else delete s.el.dataset.oniTightAbove; });
+  });
+  if (writes.length) keepingPlace(view, sections, () => { for (const write of writes) write(); });
 }
 
 /**
