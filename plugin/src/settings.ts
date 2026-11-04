@@ -19,10 +19,10 @@ export const PAGE_LINES: { id: string; label: string; pitch: number; grid?: bool
   { id: "college", label: "College rule", pitch: 27 },
   { id: "standard", label: "Standard rule", pitch: 33 },
   { id: "wide", label: "Wide rule", pitch: 41 },
-  { id: "grid-small", label: "Small grid", pitch: 16, grid: true },
-  { id: "grid-medium", label: "Medium grid", pitch: 32, grid: true },
-  { id: "grid-large", label: "Large grid", pitch: 64, grid: true },
-  { id: "grid-xl", label: "Very large grid", pitch: 128, grid: true },
+  { id: "grid-small", label: "Small grid", pitch: 20, grid: true },
+  { id: "grid-medium", label: "Medium grid", pitch: 40, grid: true },
+  { id: "grid-large", label: "Large grid", pitch: 80, grid: true },
+  { id: "grid-xl", label: "Very large grid", pitch: 160, grid: true },
 ];
 /** "text-pen": OneNote's Ink to Text pen, writing that turns into typed text when you pause. */
 /**
