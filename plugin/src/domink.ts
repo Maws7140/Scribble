@@ -245,7 +245,8 @@ export class InkPanes {
   private versions = new Map<string, number>();
   private clock = 0;
 
-  constructor(private acknowledge: (message: NativeInk) => void) {}
+  /** `lost`: the helper sent a change to a drawing we no longer have, so it should send the whole thing. */
+  constructor(private acknowledge: (message: NativeInk) => void, private lost: () => void) {}
 
   select(key: object | null, viewId: string) {
     if (key === this.active && viewId === this.viewId) return;
@@ -274,6 +275,10 @@ export class InkPanes {
     if (!path) return;
     this.versions.set(path, ++this.clock);
     const previous = update.reset ? undefined : this.snapshots.get(path);
+    if (!update.reset && !previous) {
+      this.lost();
+      return;
+    }
     const strokes = new Map((previous?.add ?? []).map(s => [s.id, s]));
     for (const stroke of update.add ?? []) strokes.set(stroke.id, stroke);
     const order = update.order ?? [...strokes.keys()];

@@ -79,7 +79,7 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
   private handwriting!: HandwritingIndex;
   /** The ink drawn in the note itself, so it scrolls with the text (see domink.ts). */
   private domInk = new InkPanes(message => this.send({ type: "ink-painted", inkPath: message.path,
-    viewId: message.viewId, id: message.id }));
+    viewId: message.viewId, id: message.id }), () => this.send({ type: "dom-refresh" }));
   private previewLoading = new Set<string>();
   private previewRetry = new Map<string, number>();
   private passiveMeasures = new WeakMap<FileView, { key: string; at: number }>();

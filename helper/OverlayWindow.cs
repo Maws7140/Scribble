@@ -156,7 +156,8 @@ public sealed partial class OverlayWindow : Window
         {
             case "layout":
                 bool targetChanged = layout?.ViewId != cmd.ViewId || layout?.InkPath != cmd.InkPath;
-                if (targetChanged) { CancelHandoff(); toldNative = false; }
+                // Away and back: the plugin dropped its copy of the ink if the view left the screen, so send it all.
+                if (targetChanged) { CancelHandoff(); toldNative = false; domReset = true; }
                 bool zoomChanged = Math.Abs((layout?.Zoom ?? 1) - cmd.Zoom) > 1e-6;
                 // The page moved under the ink (scrolling): the note's copy should be showing.
                 bool scrolled = layout != null && (Math.Abs(layout.Ox - cmd.Ox) > 0.5 || Math.Abs(layout.Oy - cmd.Oy) > 0.5);
@@ -178,7 +179,11 @@ public sealed partial class OverlayWindow : Window
                     }
                 }
                 Place();
-                if (targetChanged && cmd.Visible) UpdateNativeVisibility(scrolled: true);
+                if (targetChanged && cmd.Visible)
+                {
+                    PublishInk();
+                    UpdateNativeVisibility(scrolled: true);
+                }
                 break;
             case "ink-painted":
                 DomPainted(cmd);
