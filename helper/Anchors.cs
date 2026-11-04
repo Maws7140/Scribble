@@ -239,6 +239,7 @@ public sealed partial class OverlayWindow
         if (tops == null || tops.Length == 0) return;
         using var projection = document.Project();
         bool moved = false;
+        anchorsRepaired = false;
 
         // Strokes drawn this session before any line positions arrived: anchor in drawing order.
         foreach (var s in ink.Strokes.Where(unanchoredNew.Contains).ToList())
@@ -277,19 +278,28 @@ public sealed partial class OverlayWindow
             SetAnchor(s, line, tops[line], markModel: s.ContainsPropertyData(AnchorModelId));
         }
         if (skipped > 0) Protocol.Log($"{skipped} strokes are on lines past the end of the note ({tops.Length} lines); left as they are");
-        if (moved)
+        // A card move changes the canvas document, and a repair is meant to last. Text/PDF layout only
+        // projects the drawing. Neither is an edit: no undo step, and nothing for OneNote.
+        if (moved && OnCanvas) foreach (var s in ink.Strokes) document.MarkGeometry(s);
+        if ((moved && OnCanvas) || anchorsRepaired)
         {
-            // A card move changes the canvas document. Text/PDF layout only projects the drawing.
-            if (OnCanvas)
-            {
-                foreach (var s in ink.Strokes) document.MarkGeometry(s);
-                dirty = true;
-                saveDebounce.Stop();
-                saveDebounce.Start();
-            }
-            SendExtent();
+            dirty = true;
+            saveDebounce.Stop();
+            saveDebounce.Start();
         }
+        if (moved) SendExtent();
     }
+
+    /// <summary>
+    /// This stroke just got its lasting anchor (see MigrateBlockAnchors, AnchorLegacy): save it, points and
+    /// anchor together, or the repair is lost and done again every time the note opens.
+    /// </summary>
+    void AnchorRepaired(Stroke s)
+    {
+        document.MarkGeometry(s);
+        anchorsRepaired = true;
+    }
+    bool anchorsRepaired;
 
     /// <summary>
     /// A canvas: ink on a card goes where the card went. A card that isn't there (deleted, or the canvas is
@@ -409,7 +419,11 @@ public sealed partial class OverlayWindow
             // Only against measured lines: an estimated position would make the ink jump once it's measured.
             // Clusters further away get anchored when scrolled near.
             if (line < measured.from || line > measured.to) continue;
-            foreach (var s in cluster) SetAnchor(s, line, tops[line]);
+            foreach (var s in cluster)
+            {
+                SetAnchor(s, line, tops[line]);
+                AnchorRepaired(s);
+            }
             anchored += cluster.Count;
         }
         if (anchored > 0) Protocol.Log($"anchored {anchored} older strokes to their lines");
@@ -460,6 +474,7 @@ public sealed partial class OverlayWindow
             if (Math.Abs(blockTops[line] - tops[line]) < 0.25)
             {
                 SetAnchor(s, line, tops[line]);
+                AnchorRepaired(s);
                 changed = true;
             }
             else
@@ -475,7 +490,11 @@ public sealed partial class OverlayWindow
         {
             int line = LineAt(b.Top + b.Height / 2);
             if (line < measured.from || line > measured.to) continue;
-            foreach (var s in cluster) SetAnchor(s, line, tops![line]);
+            foreach (var s in cluster)
+            {
+                SetAnchor(s, line, tops![line]);
+                AnchorRepaired(s);
+            }
             changed = true;
             anchored += cluster.Count;
         }
