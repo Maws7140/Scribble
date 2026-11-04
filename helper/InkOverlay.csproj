@@ -3,7 +3,7 @@
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <!-- Windows 10 SDK target gives us WinRT's InkAnalyzer for ink-to-shape. -->
-    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
     <UseWPF>true</UseWPF>
     <Nullable>enable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
@@ -13,7 +13,10 @@
     <RuntimeIdentifier>win-arm64</RuntimeIdentifier>
     <!-- Older SDKs pick a Windows projection with WinRT.Runtime 2.0, which Vortice can't load (pencil ink crashed). -->
     <WindowsSdkPackageVersion>10.0.19041.57</WindowsSdkPackageVersion>
-    <SelfContained>false</SelfContained>
+    <!-- Carries its own .NET: nobody has a separate runtime to install, or an admin prompt to answer. -->
+    <SelfContained>true</SelfContained>
+    <!-- .NET and WPF carry translated error messages in a dozen languages; nobody reads this helper's. -->
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <!-- Precompiled, so it starts fast: the helper is relaunched on wake and after a lost pen. -->
     <PublishReadyToRun>true</PublishReadyToRun>
     <TieredPGO>true</TieredPGO>
