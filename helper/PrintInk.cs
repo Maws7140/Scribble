@@ -27,6 +27,24 @@ public sealed class PrintStroke
 
 public sealed partial class OverlayWindow
 {
+    /// <summary>Project an export copy to its text layout without changing the saved document.</summary>
+    internal static StrokeCollection ProjectForExport(StrokeCollection source, double[]? targetTops, int[]? targetHashes)
+    {
+        var copy = source.Clone();
+        if (targetTops == null) return copy;
+        foreach (var stroke in copy)
+        {
+            if (!TryGetAnchor(stroke, out var line, out var top)) continue;
+            line = PrintLine(stroke, line, targetHashes);
+            if (line < 0 || line >= targetTops.Length || !double.IsFinite(targetTops[line])) continue;
+            double by = targetTops[line] - top;
+            if (Math.Abs(by) > 1e-9) stroke.Transform(new Matrix(1, 0, 0, 1, 0, by), false);
+            stroke.AddPropertyData(AnchorLineId, line);
+            stroke.AddPropertyData(AnchorTopId, targetTops[line]);
+        }
+        return copy;
+    }
+
     /// <summary>Capture unsaved strokes quickly; the separate renderer does all PDF drawing work.</summary>
     void SnapshotForPrint(Command cmd)
     {
@@ -35,7 +53,7 @@ public sealed partial class OverlayWindow
             string? data = null;
             if (cmd.InkPath == inkPath)
             {
-                var copy = ink.Strokes.Clone();
+                var copy = document.Snapshot(ink.Strokes);
                 ToTrueColors(copy);
                 using var bytes = new MemoryStream();
                 copy.Save(bytes, true);
@@ -67,7 +85,7 @@ public sealed partial class OverlayWindow
                 copy = new StrokeCollection(input);
             }
             else copy = new StrokeCollection();
-            Protocol.Send(new { type = "print-ink", strokes = PrintableStrokes(copy, cmd.Hashes, cmd.Tops) });
+            Protocol.Send(new { type = "print-ink", strokes = PrintableStrokes(copy, cmd.Hashes, cmd.Tops, cmd.Mode == "preview" && cmd.Dark) });
             return 0;
         }
         catch (Exception e)
@@ -77,10 +95,11 @@ public sealed partial class OverlayWindow
         }
     }
 
-    internal static List<PrintStroke> PrintableStrokes(StrokeCollection copy, int[]? textHashes, double[]? sourceTops)
+    internal static List<PrintStroke> PrintableStrokes(StrokeCollection copy, int[]? textHashes, double[]? sourceTops, bool dark = false)
     {
         ToTrueColors(copy);
-        ToLightDisplay(copy); // White handwriting must remain visible on white paper.
+        if (dark) ToDarkDisplay(copy);
+        else ToLightDisplay(copy); // White handwriting must remain visible on white paper.
         Pens.Stylize(copy);
         var result = new List<PrintStroke>(copy.Count);
         foreach (var s in copy)

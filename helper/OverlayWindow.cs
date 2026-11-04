@@ -29,6 +29,7 @@ public sealed partial class OverlayWindow : Window
     // Wide enough for big images (ink in image pixels); taller for long PDFs when their pages arrive (ApplyLines).
     readonly PenCanvas ink = new() { Background = Brushes.Transparent, Width = 16_000, Height = 200_000 };
     readonly ScaleTransform scale = new(1, 1);
+    readonly MatrixTransform affine = new();
     readonly TranslateTransform translate = new();
     readonly DispatcherTimer tracker;
     readonly DispatcherTimer saveDebounce;
@@ -51,6 +52,7 @@ public sealed partial class OverlayWindow : Window
     bool dirty;
     // Changed by an edit (not just moved to follow its text): only that is worth sending to OneNote.
     bool edited;
+    StrokeDocument document = new();
     bool scratchOut = true;
     bool dark;
     Color? penColor; // the tool's true colour (none for effect pens, which aren't flipped)
@@ -79,7 +81,7 @@ public sealed partial class OverlayWindow : Window
         };
         // Pen eraser end erases whole strokes, like OneNote's default eraser.
         ink.EditingModeInverted = InkCanvasEditingMode.EraseByStroke;
-        ink.RenderTransform = new TransformGroup { Children = { scale, translate } };
+        ink.RenderTransform = new TransformGroup { Children = { scale, affine, translate } };
         root.Children.Add(ink);
         Content = root;
 
@@ -153,11 +155,13 @@ public sealed partial class OverlayWindow : Window
         switch (cmd.Type)
         {
             case "layout":
+                bool targetChanged = layout?.ViewId != cmd.ViewId || layout?.InkPath != cmd.InkPath;
+                if (targetChanged) { CancelHandoff(); toldNative = false; }
                 bool zoomChanged = Math.Abs((layout?.Zoom ?? 1) - cmd.Zoom) > 1e-6;
                 // The page moved under the ink (scrolling): the note's copy should be showing.
                 bool scrolled = layout != null && (Math.Abs(layout.Ox - cmd.Ox) > 0.5 || Math.Abs(layout.Oy - cmd.Oy) > 0.5);
                 layout = cmd;
-                if (scrolled && domInk && nativeShown && !WantNative()) UpdateNativeVisibility(scrolled: true);
+                if (!targetChanged && scrolled && domInk && nativeShown && !WantNative()) UpdateNativeVisibility(scrolled: true);
                 // Pen and eraser sizes are on-screen sizes: re-derive them in ink units when zoom changes.
                 if (zoomChanged && lastTool != null) ApplyTool(lastTool);
                 if (cmd.Visible) SetDark(cmd.Dark);
@@ -174,6 +178,17 @@ public sealed partial class OverlayWindow : Window
                     }
                 }
                 Place();
+                if (targetChanged && cmd.Visible) UpdateNativeVisibility(scrolled: true);
+                break;
+            case "ink-painted":
+                DomPainted(cmd);
+                break;
+            case "dom-refresh":
+                CancelHandoff();
+                toldNative = false;
+                domReset = true;
+                PublishInk();
+                UpdateNativeVisibility(scrolled: true);
                 break;
             case "pen":
                 Arm();
@@ -182,10 +197,10 @@ public sealed partial class OverlayWindow : Window
                 ApplyTool(cmd);
                 break;
             case "undo":
-                Restore(historyIndex - 1);
+                StepHistory(-1);
                 break;
             case "redo":
-                Restore(historyIndex + 1);
+                StepHistory(1);
                 break;
             case "deselect" or "cut" or "duplicate" or "nudge" or "flip" or "select-all" or "clear-ink" or "copy-image":
                 HandleSelectionCommand(cmd);
@@ -343,6 +358,7 @@ public sealed partial class OverlayWindow : Window
     /// </summary>
     bool ShowOnCards(StrokeCollection strokes)
     {
+        using var projection = document.Project();
         bool changed = false;
         foreach (var s in strokes)
         {
@@ -404,6 +420,7 @@ public sealed partial class OverlayWindow : Window
 
     void SetDark(bool value)
     {
+        using var projection = document.Project();
         if (value == dark) return;
         dark = value;
         Protocol.Log($"theme: {(dark ? "dark" : "light")}");
@@ -653,6 +670,8 @@ public sealed partial class OverlayWindow : Window
         // images), then CSS px -> WPF device-independent px for the monitor we're on.
         double k = l.Dpr / VisualTreeHelper.GetDpi(this).DpiScaleX;
         scale.ScaleX = scale.ScaleY = k * Zoom;
+        affine.Matrix = l.Transform is { Length: 4 } a
+            ? new Matrix(a[0] / Zoom, a[1] / Zoom, a[2] / Zoom, a[3] / Zoom, 0, 0) : Matrix.Identity;
         translate.X = l.Ox * k;
         translate.Y = l.Oy * k;
         double dip = VisualTreeHelper.GetDpi(this).DpiScaleX;
@@ -661,6 +680,7 @@ public sealed partial class OverlayWindow : Window
         // The rotate handle follows its selection as the page scrolls or zooms.
         if (rotateKnob.Visibility == Visibility.Visible) PlaceRotateKnob();
         PencilScale(scale.ScaleX * dip);
+        if (domInk && !toldNative && (WantNative() || replaying)) QueueNativePaint();
     }
 
     DispatcherTimer? pencilTimer;
@@ -701,7 +721,9 @@ public sealed partial class OverlayWindow : Window
     /// </summary>
     void SizeInk()
     {
-        double perUnit = scale.ScaleX * VisualTreeHelper.GetDpi(this).DpiScaleX;
+        var m = affine.Matrix;
+        double stretch = Math.Max(Math.Sqrt(m.M11 * m.M11 + m.M12 * m.M12), Math.Sqrt(m.M21 * m.M21 + m.M22 * m.M22));
+        double perUnit = scale.ScaleX * VisualTreeHelper.GetDpi(this).DpiScaleX * stretch;
         if (!(perUnit > 0)) return;
         double height = Math.Min(wantedHeight, MaxCanvasPixels / perUnit);
         double width = Math.Min(wantedWidth, MaxCanvasPixels / perUnit);
@@ -800,6 +822,7 @@ public sealed partial class OverlayWindow : Window
         Pens.Stylize(strokes);
         StopReplay();
         ink.Strokes = strokes;
+        document = new StrokeDocument();
         HookStrokes();
         dirty = false;
         ResetAnchors();
@@ -811,14 +834,16 @@ public sealed partial class OverlayWindow : Window
 
     void HookStrokes()
     {
+        document.TrackAll(ink.Strokes);
         ink.Strokes.StrokesChanged += (_, e) =>
         {
             if (!restoring && !importing) foreach (var s in e.Added) OnStrokeAdded(s);
+            document.TrackAll(new StrokeCollection(e.Added));
             if (papers != null && !restoring && !importing) ShowOnCards(new StrokeCollection(e.Added));
             // Pencil/effect strokes made by the canvas itself (drawn, split by the eraser) get their look once
             // the change is done (after ink-to-shape, which runs at a higher priority).
             if (e.Added.Any(s => s is not StyledStroke && Pens.StyleOf(s.DrawingAttributes) != null))
-                Dispatcher.BeginInvoke(DispatcherPriority.Background, () => Pens.Stylize(ink.Strokes));
+                Dispatcher.BeginInvoke(DispatcherPriority.Background, () => Pens.Stylize(ink.Strokes, document.Transfer));
             Changed();
         };
         SendExtent();
@@ -841,6 +866,7 @@ public sealed partial class OverlayWindow : Window
     {
         SendExtent();
         if (restoring) return;
+        document.CommitEdits(ink.Strokes);
         dirty = true;
         edited = true;
         saveDebounce.Stop();
@@ -867,6 +893,14 @@ public sealed partial class OverlayWindow : Window
         SendHistory(added: true);
     }
 
+    void StepHistory(int direction)
+    {
+        // Commit before computing the destination; otherwise an immediate undo passed -1 before the
+        // pending first stroke became a history entry and silently did nothing.
+        if (snapshotDebounce.IsEnabled) { snapshotDebounce.Stop(); Snapshot(); }
+        Restore(historyIndex + direction);
+    }
+
     void Restore(int index)
     {
         // Commit a pending snapshot first so undo never skips the latest change.
@@ -877,6 +911,7 @@ public sealed partial class OverlayWindow : Window
         StopReplay();
         ClearSelection();
         ink.Strokes = Unpack(history[index]);
+        document = new StrokeDocument();
         HookStrokes();
         Reanchor(); // the snapshot may be from a different layout
         restoring = false;
@@ -885,9 +920,9 @@ public sealed partial class OverlayWindow : Window
         SendHistory();
     }
 
-    static byte[] Pack(StrokeCollection strokes)
+    byte[] Pack(StrokeCollection strokes)
     {
-        var copy = strokes.Clone();
+        var copy = document.Snapshot(strokes);
         ToTrueColors(copy);
         using var ms = new MemoryStream();
         copy.Save(ms, true);
@@ -929,7 +964,7 @@ public sealed partial class OverlayWindow : Window
                 {
                     var tmp = inkPath + ".tmp";
                     // Save true colours, never the dark-mode display colours.
-                    var toSave = ink.Strokes.Clone();
+                    var toSave = document.Snapshot(ink.Strokes);
                     ToTrueColors(toSave);
                     using (var fs = File.Create(tmp)) toSave.Save(fs, true);
                     Native.ReplaceFile(tmp, inkPath);

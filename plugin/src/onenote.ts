@@ -74,7 +74,7 @@ export interface TextChange {
 export function noteBlocks(app: App, view: MarkdownView, tops: number[]): ExportBlock[] {
   const file = view.file;
   if (!file) return [];
-  const lines = (view.editor?.getValue() ?? "").split("\n");
+  const lines = (view.getMode() === "preview" ? view.getViewData() : view.editor?.getValue() ?? "").split("\n");
   const sections = app.metadataCache.getFileCache(file)?.sections ?? [];
   const blocks: ExportBlock[] = [];
   for (const s of sections) {

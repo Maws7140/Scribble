@@ -28,6 +28,8 @@ public sealed class ExportRequest
     public string Title { get; set; } = "";
     public string? NoteKey { get; set; }                // the note's vault path, echoed back with the page ID
     public string? InkPath { get; set; }
+    public double[]? LineTops { get; set; }
+    public int[]? LineHashes { get; set; }
     public string? PageId { get; set; }                 // the page this note went to last time, if any
     public string Section { get; set; } = "Obsidian";
     public List<ExportBlock> Blocks { get; set; } = new();
@@ -81,7 +83,7 @@ public static class OneNoteExport
         // between, the page has both (which the sync knows how to drop) instead of nothing, and a page with
         // nothing on it read back as "all the ink was erased in OneNote".
         var previous = PageObjects(app, pageId);
-        var strokes = LoadInk(req.InkPath);
+        var strokes = OverlayWindow.ProjectForExport(LoadInk(req.InkPath), req.LineTops, req.LineHashes);
         if (req.WhiteInkToBlack) WhiteToBlack(strokes);
         SeeThroughHighlighters(strokes);
         double originX = Math.Min(req.ContentLeft, strokes.Count > 0 ? strokes.GetBounds().Left : req.ContentLeft);

@@ -14,7 +14,7 @@ import { MathSettings } from "./math/engine";
 import { GraphView, parseGraph } from "./math/graph";
 import { EditorView, ViewUpdate } from "@codemirror/view";
 import { EditGesture, applyEditGesture } from "./editgesture";
-import { DomInk, DomUpdate } from "./domink";
+import { InkPanes, DomUpdate, NativeInk } from "./domink";
 import { lineShifts } from "./lineshift";
 import { MergedHistory, PageHistory } from "./undo";
 import { ImportCard, OneNotePage, PagePicker, freeCanvasPath, writeCanvas } from "./onenotecanvas";
@@ -22,6 +22,7 @@ import { CardChange, applyCardChanges, canvasNodes } from "./canvassync";
 import { CanvasTouch, TouchCanvas } from "./canvastouch";
 import { ruleCanvas } from "./canvaslines";
 import { InkPrint, PrintReference, PrintStroke } from "./print";
+import { clearCoordinateProbes } from "./coordinates";
 
 /**
  * Drives a native Windows Ink overlay (helper/InkOverlay.exe) that sits over the active note.
@@ -77,7 +78,13 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
   private selected = 0;
   private handwriting!: HandwritingIndex;
   /** The ink drawn in the note itself, so it scrolls with the text (see domink.ts). */
-  private domInk = new DomInk();
+  private domInk = new InkPanes(message => this.send({ type: "ink-painted", inkPath: message.path,
+    viewId: message.viewId, id: message.id }));
+  private previewLoading = new Set<string>();
+  private previewRetry = new Map<string, number>();
+  private passiveMeasures = new WeakMap<FileView, { key: string; at: number }>();
+  private inkViewIds = new WeakMap<FileView, string>();
+  private nextInkViewId = 0;
   /** One undo for ink and text, for Editing Toolbar's undo and redo when the ink tools are in its bar. */
   private merged = new MergedHistory((command) => this.command(command));
   private watchedCanvas: CanvasWithHistory | null = null;
@@ -98,7 +105,10 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
     this.addSettingTab(new InkSettingTab(this.app, this));
     this.registerMarkdownPostProcessor((el, ctx) => this.printing.process(el, ctx), 10000);
     // Switching light/dark changes how neutral pen colours are shown.
-    this.registerEvent(this.app.workspace.on("css-change", () => this.toolbar.render()));
+    this.registerEvent(this.app.workspace.on("css-change", () => {
+      this.domInk.invalidateAll();
+      this.toolbar.render();
+    }));
     this.registerEvent(this.app.workspace.on("css-change", () => forgetHeadingSpace()));
     this.addRibbonIcon("pen-tool", "Toggle ink layer", () => this.toggleLayer());
     this.addCommand({ id: "toggle-ink-layer", name: "Toggle ink layer", callback: () => this.toggleLayer() });
@@ -276,11 +286,27 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
     }));
     this.registerEvent(this.app.vault.on("rename", (f, old) => {
       this.ignoreCache.clear();
+      const widths = this.settings.pageWidths;
+      for (const key of Object.keys(widths)) {
+        if (key === old || key.startsWith(old + "/")) {
+          widths[f.path + key.slice(old.length)] = widths[key];
+          delete widths[key];
+          this.persist();
+        }
+      }
       this.handwriting.rename(old, f.path);
       if (f instanceof TFile && f.extension !== "ink") this.inkFileMoved(f, old);
     }));
     this.registerEvent(this.app.vault.on("modify", (f) => {
-      if (f instanceof TFile && f.extension === "ink" && f.path !== this.loadedInkPath()) this.queueIndex([f]);
+      if (f instanceof TFile && f.extension === "md") {
+        const base = this.vaultPath();
+        if (base) this.domInk.invalidate(this.inkPathFor(base, f.path));
+      }
+      if (f instanceof TFile && f.extension === "ink" && f.path !== this.loadedInkPath()) {
+        this.queueIndex([f]);
+        const base = this.vaultPath();
+        if (base) this.domInk.invalidate(path.join(base, f.path));
+      }
       if (f instanceof TFile && f.extension === "canvas") this.markDirty(f.path);
     }));
 
@@ -306,7 +332,6 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
       const what = el ? `${el.tagName.toLowerCase()}.${Array.from(el.classList).join(".")}` : "?";
       this.send({ type: "debug", message: `pen down reached Obsidian, not the ink layer: (${Math.round(e.clientX)},${Math.round(e.clientY)}) on ${what} in a ${this.inkKind()} view` });
     }, { capture: true });
-
     // A finger on a canvas drags and pinches it (see canvastouch.ts).
     this.registerDomEvent(window, "pointerdown", (e: PointerEvent) => this.canvasTouch.onPointerDown(e, this.touchCanvas()), { capture: true });
     this.registerDomEvent(window, "pointermove", (e: PointerEvent) => this.canvasTouch.onPointerMove(e), { capture: true, passive: true });
@@ -348,6 +373,7 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
     this.unkeepPageWidths();
     this.toolbar.destroy();
     this.domInk.destroy();
+    clearCoordinateProbes();
     for (const proc of [this.helper, this.standby]) {
       if (!proc) continue;
       // Closing stdin makes the helper save and exit; kill it if it doesn't.
@@ -385,11 +411,11 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
     return { width: 800, left: 0, textWidth: 800, lineHeight: 24 };
   }
 
-  async printSnapshot(file: TFile, hashes: number[], reference: PrintReference): Promise<PrintStroke[]> {
+  async printSnapshot(file: TFile, hashes: number[], reference: PrintReference, preview = false): Promise<PrintStroke[]> {
     const base = this.vaultPath();
     if (!base || this.ignoreFor(file).ink) return [];
     let snapshot: string | null = null;
-    if (this.loadedPath === file.path && this.helper?.stdin.writable) {
+    if (this.loadedInkPath() === inkFileFor(file.path, "markdown") && this.helper?.stdin.writable) {
       const id = ++this.printId;
       snapshot = await new Promise<string | null>((resolve, reject) => {
         const timeout = window.setTimeout(() => {
@@ -439,7 +465,8 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
         window.clearTimeout(timeout);
         if (!received) reject(new Error("OneNote Ink: the PDF renderer stopped before returning its ink."));
       });
-      proc.stdin.end(JSON.stringify({ inkPath: this.inkPathFor(base, file.path), hashes, tops: reference.tops, snapshot }) + "\n");
+      proc.stdin.end(JSON.stringify({ inkPath: this.inkPathFor(base, file.path), hashes, tops: reference.tops, snapshot,
+        mode: preview ? "preview" : undefined, dark: preview && isDarkTheme() }) + "\n");
     });
   }
 
@@ -558,11 +585,13 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
       if (proc !== this.helper) return;
       new Notice("OneNote Ink helper failed: " + e.message);
       this.helper = null;
+      this.domInk.releaseNative();
     });
     proc.on("exit", (code) => {
       if (proc === this.standby) { this.standby = null; return; }
       if (proc !== this.helper) return;
       this.helper = null;
+      this.domInk.releaseNative();
       if (this.unloading) return;
       // The helper exits on purpose (code 75) when its pen input dies, e.g. after the Surface sleeps,
       // and may crash; either way bring up a fresh one. Give up if it's stuck in a crash loop.
@@ -610,6 +639,8 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
     const old = this.helper;
     this.standby = null;
     this.helper = next;
+    this.domInk.releaseNative();
+    this.send({ type: "dom-refresh" });
     if (old) {
       // It saves anything pending when its stdin closes; then the new one re-reads the file.
       old.once("exit", () => this.send({ type: "reload" }));
@@ -719,7 +750,8 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
         this.domInk.update(msg as unknown as DomUpdate);
         break;
       case "ink-native":
-        this.domInk.setNative(msg.path ?? "", !!msg.visible);
+        this.sync();
+        this.domInk.setNative(msg as NativeInk);
         break;
       case "insert-space":
         void this.onInsertSpace(msg.inkPath ?? "", msg.line ?? 0, msg.count ?? 0);
@@ -1525,6 +1557,8 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
         title: view.file.basename,
         noteKey: notePath,
         inkPath,
+        lineTops: layout.tops,
+        lineHashes: lineHashes((view.getMode() === "preview" ? view.getViewData() : view.editor.getValue()).split("\n")),
         pageId: typeof saved === "string" ? saved : saved?.pageId ?? null,
         state,
         force: !!opts.force,
@@ -1857,8 +1891,72 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
     }
   }
 
+  /** Passive ink belongs to every visible note, including while focus is on a web view or another pane. */
+  private syncPassiveInk(active: FileView | null) {
+    const visible = new Set<object>(active ? [active] : []);
+    const base = this.vaultPath();
+    if (!base) return;
+    for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
+      const view = leaf.view;
+      if (!(view instanceof MarkdownView) || view === active || !view.file || view.containerEl.win !== window) continue;
+      const area = view.contentEl.getBoundingClientRect();
+      if (!area.width || !area.height) continue;
+      visible.add(view);
+      const ignored = this.ignoreFor(view.file);
+      const raw = view.getMode() === "source" && this.settings.hideInkInSource
+        && !view.contentEl.querySelector(".markdown-source-view")?.classList.contains("is-live-preview");
+      const sizer = view.contentEl.querySelector<HTMLElement>(view.getMode() === "preview" ? ".markdown-preview-sizer" : ".cm-sizer");
+      const path = this.inkPathFor(base, view.file.path);
+      const text = view.getMode() === "preview" ? view.getViewData() : view.editor?.getValue() ?? "";
+      if (!sizer || !this.enabled || ignored.ink || raw || !this.showsFile(view, text)) {
+        this.domInk.mountFor(view, null, null);
+        continue;
+      }
+      this.rulePage(view, sizer, ignored.lines);
+      this.keepPageWidth(view, sizer, path);
+      this.growPage(sizer, sizer.getBoundingClientRect().height, area.height, path);
+      this.domInk.mountFor(view, sizer, path);
+      const box = sizer.getBoundingClientRect();
+      const key = `${path}|${view.getMode()}|${box.top}|${box.width}|${box.height}|${view.file.stat.mtime}`;
+      const last = this.passiveMeasures.get(view);
+      if (!last || key !== last.key || performance.now() - last.at >= 250) {
+        this.passiveMeasures.set(view, { key, at: performance.now() });
+        const layout = lineTops(view, sizer, (this.inkBottom.get(path) ?? 0) > 0);
+        if (layout) {
+          const hashes = lineHashes(text.split("\n"));
+          this.domInk.moveLinesFor(view, path, 0, layout.tops, hashes, layout.measuredFrom, layout.measuredTo);
+          if (!this.domInk.has(path) && !this.previewLoading.has(path) && (this.previewRetry.get(path) ?? 0) <= Date.now()) {
+            this.previewLoading.add(path);
+            const token = this.domInk.snapshotToken(path);
+            void this.printSnapshot(view.file, hashes, { width: box.width, left: 0, textWidth: box.width,
+              lineHeight: parseFloat(getComputedStyle(sizer).lineHeight) || 24, tops: layout.tops }, true).then(strokes => {
+              if (this.unloading) return;
+              const seeded = this.domInk.seed({ path, reset: true, order: strokes.map((_, i) => i + 1),
+                add: strokes.map((s, i) => ({ ...s, id: i + 1 })), lines: strokes.map(s => s.line),
+                anchorTops: strokes.map(s => s.top), tops: layout.tops, hashes }, token);
+              if (seeded && !this.inkBottom.has(path)) this.inkBottom.set(path, Math.max(0, ...strokes.map(s => s.y + s.h)));
+            }).catch((error: Error) => {
+              this.previewRetry.set(path, Date.now() + 5000);
+              console.error("[onenote-ink] passive ink:", error);
+            }).finally(() => this.previewLoading.delete(path));
+          }
+        }
+      }
+    }
+    this.domInk.prune(visible);
+  }
+
+  private inkViewId(view: FileView | null): string {
+    if (!view) return "";
+    let id = this.inkViewIds.get(view);
+    if (!id) { id = String(++this.nextInkViewId); this.inkViewIds.set(view, id); }
+    return id;
+  }
+
   private sync() {
     const target = this.activeInkView();
+    this.domInk.select(target?.view ?? null, this.inkViewId(target?.view ?? null));
+    this.syncPassiveInk(target?.view ?? null);
     // Notes (folders, tags, a property) set to go without some of this: see ignoreFor.
     const ignored = this.shownIgnored(target?.view ?? null);
     // A note whose text hasn't arrived in its view yet (see showsItsFile) shows no ink: it would be over
@@ -1916,6 +2014,7 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
         dpr: window.devicePixelRatio,
         dark: isDarkTheme(),
         inkPath,
+        viewId: this.inkViewId(view),
         holes: uiHoles(area, view),
         domInk: true,
       };
@@ -1984,7 +2083,7 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
     const file = view.file;
     if (!(view instanceof MarkdownView) || !file) return true;
     if (view === this.loadedView && file.path === this.loadedPath) return true;
-    const text = view.editor?.getValue() ?? "";
+    const text = view.getMode() === "preview" ? view.getViewData() : view.editor?.getValue() ?? "";
     if (this.showsFile(view, text)) {
       this.loadedView = view;
       this.loadedPath = file.path;
@@ -1995,7 +2094,8 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
       this.confirmingAt = performance.now();
       void this.app.vault.cachedRead(file).then((disk) => {
         const same = (a: string) => a.replace(/^﻿/, "").replace(/\r\n?/g, "\n");
-        if (view.file === file && same(disk) === same(view.editor?.getValue() ?? "")) {
+        const current = view.getMode() === "preview" ? view.getViewData() : view.editor?.getValue() ?? "";
+        if (view.file === file && same(disk) === same(current)) {
           this.loadedView = view;
           this.loadedPath = file.path;
         }
@@ -2067,16 +2167,18 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
         ox: layout.ox,
         oy: layout.oy,
         zoom: layout.zoom,
+        transform: layout.transform,
         dpr: window.devicePixelRatio,
         dark: layout.dark,
         inkPath,
+        viewId: this.inkViewId(view),
         holes: uiHoles(layout.area, view),
         // The ink is drawn in the page while the pen is away, so it scrolls with the PDF's pages or the picture.
         domInk: !!layout.inkHost,
       };
     }
     const host = inkOn && layout?.inkHost && inkPath && !covered ? layout.inkHost : null;
-    this.domInk.mount(host?.el ?? null, inkPath, host && layout ? { left: host.left, top: host.top, scale: host.scale ?? layout.zoom, positioned: host.positioned } : undefined);
+    this.domInk.mount(host?.el ?? null, inkPath, host && layout ? { left: host.left, top: host.top, scale: host.scale ?? layout.zoom, positioned: host.positioned, matrix: host.matrix } : undefined);
     const key = JSON.stringify({ ...msg, title: undefined });
     if (key !== this.lastSent) {
       this.lastSent = key;
@@ -2116,7 +2218,7 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
     this.linesMode = mode;
     this.linesPath = inkPath;
     // While a note is opening or reloading, its editor is briefly empty. Never report that.
-    const text = view.editor?.getValue() ?? "";
+    const text = mode === "preview" ? view.getViewData() : view.editor?.getValue() ?? "";
     if (!text && (view.file?.stat.size ?? 0) > 0) return;
     // ...or still shows the note it had before: Obsidian names the new file first and reads it after.
     // Those lines would be another note's, and the ink would be moved onto them.
@@ -2135,7 +2237,7 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
     this.lastLines = key;
     const seq = ++this.linesSeq;
     this.send({ type: "lines", inkPath, mode, seq, tops, blockTops, hashes, measuredFrom: layout.measuredFrom, measuredTo: layout.measuredTo });
-    this.domInk.moveLines(inkPath, seq, tops, hashes);
+    this.domInk.moveLines(inkPath, seq, tops, hashes, layout.measuredFrom, layout.measuredTo);
     if (switched) {
       window.setTimeout(() => {
         if (this.activeNote() !== view) return;
@@ -2181,9 +2283,24 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
     const cs = getComputedStyle(scroller);
     const padLeft = parseFloat(cs.paddingLeft) || 0;
     const pad = padLeft + (parseFloat(cs.paddingRight) || 0);
-    // What the note's text area would be across the whole editor area: this pane's, plus what the split takes.
-    const wider = Math.max(0, root.getBoundingClientRect().width - view.containerEl.getBoundingClientRect().width);
-    const inner = Math.max(200, Math.round(scroller.clientWidth - pad + wider));
+    // A docked sidebar takes space from rootSplit just like another note pane does. Include that space
+    // in the virtual page: toggling or resizing a sidebar must not re-centre/re-wrap text under fixed ink.
+    const docks = [this.app.workspace.leftSplit, this.app.workspace.rightSplit]
+      .reduce((width, dock) => width + ((dock as unknown as { containerEl?: HTMLElement })
+        ?.containerEl?.getBoundingClientRect().width ?? 0), 0);
+    const availableWidth = root.getBoundingClientRect().width + docks;
+    const pagePath = view.file?.path ?? inkPath;
+    const widths = this.settings.pageWidths ??= {};
+    if (!Number.isFinite(widths[pagePath]) || widths[pagePath] < 200) {
+      widths[pagePath] = availableWidth;
+      this.persist();
+    }
+    const fullWidth = widths[pagePath];
+    const wider = fullWidth - view.containerEl.getBoundingClientRect().width;
+    // clientWidth rounds fractional sidebar/split widths. Use the fractional box and subtract the
+    // scrollbar/border gutter, or opening a 296.5 px dock changes the supposedly fixed page by 1 px.
+    const gutter = scroller.offsetWidth - scroller.clientWidth;
+    const inner = Math.max(200, Math.round(scroller.getBoundingClientRect().width - gutter - pad + wider));
     const ink = this.inkSides.get(inkPath);
     const readable = sizer.closest(".is-readable-line-width") !== null;
     const key = `${inner}|${readable}|${ink?.left ?? 0}|${ink?.right ?? 0}`;
@@ -2467,8 +2584,8 @@ class InkSettingTab extends PluginSettingTab {
       });
 
     new Setting(containerEl)
-      .setName("Keep the page width in split panes")
-      .setDesc("A note keeps the page it has across the whole window: in a split pane the text doesn't re-wrap under your ink, and you scroll sideways to the rest of the page (out to your ink, never past the screen).")
+      .setName("Keep the page width")
+      .setDesc("Keep each note's page width when opening sidebars, splitting panes, or resizing the window, so the text stays with your handwriting. Scroll sideways to see the rest of the page.")
       .addToggle((t) => t.setValue(s.keepPageWidth).onChange((v) => { s.keepPageWidth = v; if (!v) this.plugin.unkeepPageWidths(); this.plugin.save(false); }));
 
     new Setting(containerEl)

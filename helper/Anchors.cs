@@ -17,7 +17,7 @@ namespace InkOverlay;
 /// unique line of text above it (and below, as a fallback) with its distance in lines. When the plugin
 /// reports the note's lines (positions + fingerprints), each anchor first finds its reference text again,
 /// which gives its line in the note as it is now, then the stroke moves by (that line's top − stored top).
-/// So the file is always self-consistent whichever mode last saved it, and no edit history is needed.
+/// This is a display projection: saves retain canonical geometry until a deliberate ink edit changes it.
 /// Strokes written together (a word, a drawing) share one anchor so they move as a unit.
 ///
 /// On a canvas the "lines" are the board (line 0, which never moves) and the cards, which move both ways, so
@@ -237,10 +237,15 @@ public sealed partial class OverlayWindow
     internal void Reanchor()
     {
         if (tops == null || tops.Length == 0) return;
+        using var projection = document.Project();
         bool moved = false;
 
         // Strokes drawn this session before any line positions arrived: anchor in drawing order.
-        foreach (var s in ink.Strokes.Where(unanchoredNew.Contains).ToList()) AnchorNew(s);
+        foreach (var s in ink.Strokes.Where(unanchoredNew.Contains).ToList())
+        {
+            AnchorNew(s);
+            document.MarkGeometry(s); // initial anchor for newly drawn ink, not a layout rewrite
+        }
         unanchoredNew.Clear();
         // Ink from before anchors existed was written in Live Preview, so anchor it against that layout
         // only, in clusters so a drawing made of separate strokes stays in one piece.
@@ -260,8 +265,9 @@ public sealed partial class OverlayWindow
             // A line the note doesn't have right now (it's still loading, or the text was cut): leave the
             // stroke exactly as it is, anchor and all, rather than forcing it onto some other line.
             if (line < 0 || line >= tops.Length) { skipped++; continue; }
+            if (line < measured.from || line > measured.to) continue;
             double d = tops[line] - refTop;
-            if (Math.Abs(d) >= 0.25)
+            if (Math.Abs(d) > 1e-9)
             {
                 s.Transform(new Matrix(1, 0, 0, 1, 0, d), false);
                 moved = true;
@@ -273,10 +279,14 @@ public sealed partial class OverlayWindow
         if (skipped > 0) Protocol.Log($"{skipped} strokes are on lines past the end of the note ({tops.Length} lines); left as they are");
         if (moved)
         {
-            // Positions or anchor metadata changed, not content: save, but don't make it an undo step.
-            dirty = true;
-            saveDebounce.Stop();
-            saveDebounce.Start();
+            // A card move changes the canvas document. Text/PDF layout only projects the drawing.
+            if (OnCanvas)
+            {
+                foreach (var s in ink.Strokes) document.MarkGeometry(s);
+                dirty = true;
+                saveDebounce.Stop();
+                saveDebounce.Start();
+            }
             SendExtent();
         }
     }
@@ -325,15 +335,18 @@ public sealed partial class OverlayWindow
         int Map(int line) => line < from ? line : count > 0 ? line + count : Math.Max(from, line + count);
         foreach (var s in ink.Strokes)
         {
-            if (!TryGetAnchor(s, out var line, out _)) continue;
-            int moved = Map(line);
-            s.AddPropertyData(AnchorLineId, moved);
-            foreach (var offsetId in new[] { AboveOffsetId, BelowOffsetId })
+            document.EditAnchors(s, stroke =>
             {
-                if (!s.ContainsPropertyData(offsetId)) continue;
-                int refLine = line + Convert.ToInt32(s.GetPropertyData(offsetId));
-                s.AddPropertyData(offsetId, Map(refLine) - moved);
-            }
+                if (!TryGetAnchor(stroke, out var line, out _)) return;
+                int moved = Map(line);
+                stroke.AddPropertyData(AnchorLineId, moved);
+                foreach (var offsetId in new[] { AboveOffsetId, BelowOffsetId })
+                {
+                    if (!stroke.ContainsPropertyData(offsetId)) continue;
+                    int refLine = line + Convert.ToInt32(stroke.GetPropertyData(offsetId));
+                    stroke.AddPropertyData(offsetId, Map(refLine) - moved);
+                }
+            });
         }
         // Strokes waiting for line positions keep theirs; the rest move when the note's new lines arrive.
         dirty = true;
@@ -426,8 +439,7 @@ public sealed partial class OverlayWindow
     /// its last line, and in Reading view that line is below the block. In Live Preview (blockTops), put such
     /// ink where that anchor had it, then anchor it afresh to the line it's beside, in clusters. Ink not by
     /// such a block just takes the new mark. Off-screen clusters wait (their lines are only estimates) and
-    /// keep the older anchor. True if points or anchor metadata changed, so repairs are saved even when
-    /// none of the points had to move.
+    /// keep the older anchor. True if display points or anchor metadata changed; canonical ink is retained.
     /// </summary>
     bool MigrateBlockAnchors()
     {
@@ -438,8 +450,9 @@ public sealed partial class OverlayWindow
             if (s.ContainsPropertyData(AnchorModelId) || !TryGetAnchor(s, out var oldLine, out var refTop)) continue;
             int line = Relocate(s, oldLine);
             if (line < 0 || line >= tops!.Length) continue;
+            if (line < measured.from || line > measured.to) continue;
             double d = blockTops![line] - refTop;
-            if (Math.Abs(d) >= 0.25)
+            if (Math.Abs(d) > 1e-9)
             {
                 s.Transform(new Matrix(1, 0, 0, 1, 0, d), false);
                 changed = true;
@@ -477,7 +490,11 @@ public sealed partial class OverlayWindow
         var sel = ink.GetSelectedStrokes();
         if (sel.Count == 0) return;
         int line = LineFor(sel.GetBounds());
-        foreach (var s in sel) SetAnchor(s, line, tops[line]);
+        foreach (var s in sel)
+        {
+            SetAnchor(s, line, tops[line]);
+            document.MarkGeometry(s);
+        }
     }
 
     /// <summary>What ink in this box belongs to: the line under its middle, or on a canvas the card under it.</summary>

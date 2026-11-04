@@ -337,8 +337,9 @@ public sealed partial class OverlayWindow
         replaying = true;
         // The note's copy of the ink steps aside too, or the replay would play over the finished page.
         nativeShown = true;
-        toldNative = true;
-        Protocol.Send(new { type = "ink-native", path = inkPath, visible = true });
+        CancelHandoff();
+        toldNative = false;
+        QueueNativePaint();
         replayDone = 0;
         replayPartial = null;
         replayStartedAt = DateTime.Now;

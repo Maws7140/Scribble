@@ -30,7 +30,9 @@ public sealed class Command
     public double Dpr { get; set; } = 1;
     // CSS px per ink unit: 1 for notes; for PDFs (ink in PDF points) and images (ink in image pixels) the zoom.
     public double Zoom { get; set; } = 1;
+    public double[]? Transform { get; set; }     // optional image-pixel to viewport linear mapping
     public string? InkPath { get; set; }
+    public string? ViewId { get; set; }          // native input belongs to one leaf, even when two show the same file
     public string? Snapshot { get; set; }       // read-only ISF snapshot for the separate PDF renderer
     public bool Dark { get; set; }
     // Obsidian UI over the note (menus, popovers, other plugins' floating toolbars), CSS px in the viewport:

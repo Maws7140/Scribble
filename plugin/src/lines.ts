@@ -157,7 +157,8 @@ function setSpace(el: HTMLElement, top: number, bottom: number) {
 function reserveBlankSpace(view: MarkdownView, r: PreviewRenderer, sizerTop: number, lineHeight: number, on: boolean) {
   const sections = contentSections(r);
   sameLayout(view, sections, on);
-  const count = view.editor?.lineCount() ?? 0;
+  const sourceLines = view.getViewData().split("\n");
+  const count = sourceLines.length;
   // Read every rect first, then write, so one change can't skew the next measurement.
   const plan: { el: HTMLElement; top: number; bottom: number }[] = [];
   for (let i = 0; i < sections.length; i++) {
@@ -187,7 +188,7 @@ function reserveBlankSpace(view: MarkdownView, r: PreviewRenderer, sizerTop: num
       if (i === sections.length - 1) {
         let trailing = 0;
         for (let l = s.end.line + 1; l < count; l++, trailing++) {
-          if (view.editor?.getLine(l)?.trim()) { trailing = 0; break; }
+          if (sourceLines[l]?.trim()) { trailing = 0; break; }
         }
         bottom = trailing * lineHeight;
       }
@@ -409,7 +410,7 @@ function previewTops(view: MarkdownView, sizer: HTMLElement, sizerTop: number, h
   if (offset === null) return null;
 
   const last = sections[sections.length - 1];
-  const count = Math.max(view.editor?.lineCount() ?? 0, (last?.end?.line ?? 0) + 1);
+  const count = Math.max(view.getViewData().split("\n").length, (last?.end?.line ?? 0) + 1);
   const tops = new Array<number>(count).fill(NaN);
   let measuredFrom = Infinity;
   let measuredTo = -1;

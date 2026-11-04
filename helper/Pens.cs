@@ -39,13 +39,15 @@ public static class Pens
         da.ContainsPropertyData(PenStyleId) ? da.GetPropertyData(PenStyleId) as string : null;
 
     /// <summary>Strokes with a pen style become <see cref="StyledStroke"/>s (in place, same order).</summary>
-    public static void Stylize(StrokeCollection strokes)
+    public static void Stylize(StrokeCollection strokes, Action<Stroke, Stroke>? replacing = null)
     {
         for (int i = 0; i < strokes.Count; i++)
         {
             var s = strokes[i];
             if (s is StyledStroke || StyleOf(s.DrawingAttributes) == null) continue;
-            strokes[i] = StyledStroke.From(s);
+            var styled = StyledStroke.From(s);
+            replacing?.Invoke(s, styled);
+            strokes[i] = styled;
         }
     }
 

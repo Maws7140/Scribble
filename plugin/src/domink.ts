@@ -33,12 +33,16 @@ export interface DomUpdate {
   seq?: number;
   /** The line each stroke in `order` belongs to; -1 for none. */
   lines?: number[];
+  /** Reference positions for this snapshot, independent of whichever pane currently has focus. */
+  tops?: number[];
+  hashes?: number[];
+  anchorTops?: number[];
 }
 
 const SVG = "http://www.w3.org/2000/svg";
 
-interface Entry { el: SVGPathElement | SVGImageElement; hl: boolean; line: number; moved: number }
-interface Lines { tops: number[]; hashes: number[] }
+interface Entry { el: SVGPathElement | SVGImageElement; hl: boolean; line: number; moved: number; top?: number }
+interface Lines { tops: number[]; hashes: number[]; from?: number; to?: number }
 
 /** Line positions kept while the helper catches up (it's rarely more than a few behind). */
 const MAX_LINES = 64;
@@ -46,12 +50,15 @@ const MAX_LINES = 64;
 export class DomInk {
   private svg: SVGSVGElement;
   private path = "";
-  private nativeShown = true;
+  private nativeShown = false;
   private strokes = new Map<number, Entry>();
   private linesPath = "";
   private sentLines = new Map<number, Lines>();
   private latest: Lines | null = null;
   private drawnFor = 0;
+  private drawnLines: Lines | null = null;
+
+  get ready(): boolean { return this.svg.isConnected && !this.nativeShown; }
 
   constructor() {
     this.svg = document.createElementNS(SVG, "svg");
@@ -74,6 +81,9 @@ export class DomInk {
       }
       entry.hl = s.hl;
       const el = entry.el;
+      // A new helper geometry already includes its projection. Never apply an older correction twice.
+      entry.moved = 0;
+      el.removeAttribute("transform");
       if (s.img) {
         el.setAttribute("href", `data:image/png;base64,${s.img}`);
         el.setAttribute("x", String(s.x ?? 0));
@@ -93,28 +103,33 @@ export class DomInk {
     for (const id of [...this.strokes.keys()]) if (!keep.has(id)) this.strokes.delete(id);
     const listed = order.map((id) => this.strokes.get(id)).filter((e): e is Entry => !!e);
     // Highlighters under the pen ink, each group in drawing order.
-    this.svg.replaceChildren(...listed.filter((e) => e.hl).map((e) => e.el), ...listed.filter((e) => !e.hl).map((e) => e.el));
+    const children = [...listed.filter((e) => e.hl), ...listed.filter((e) => !e.hl)].map(e => e.el);
+    if (children.length !== this.svg.childNodes.length || children.some((el, i) => this.svg.childNodes[i] !== el)) {
+      this.svg.replaceChildren(...children);
+    }
     order.forEach((id, i) => {
       const entry = this.strokes.get(id);
       if (entry) entry.line = u.lines?.[i] ?? -1;
+      if (entry) entry.top = u.anchorTops?.[i];
     });
     this.drawnFor = u.seq ?? 0;
+    this.drawnLines = u.tops && u.hashes ? { tops: u.tops, hashes: u.hashes } : null;
     for (const seq of [...this.sentLines.keys()]) if (seq < this.drawnFor) this.sentLines.delete(seq);
     this.follow();
   }
 
   /**
-   * The note's lines moved. The helper moves the ink for good, but that takes a few hundred ms, and meanwhile
+   * The note's lines moved. The helper updates its display projection, but that takes a few hundred ms, and meanwhile
    * the ink would be left where the text was: when Live Preview corrected the height of the lines above while
    * you scrolled up, the text stayed put and the ink flew off by 170 px and came back. So each stroke follows
    * its line now, in the frame the line moved, until the helper's own drawing for these lines arrives.
    */
-  moveLines(path: string, seq: number, tops: number[], hashes: number[]) {
+  moveLines(path: string, seq: number, tops: number[], hashes: number[], from = 0, to = tops.length - 1) {
     if (path !== this.linesPath) {
       this.linesPath = path;
       this.sentLines.clear();
     }
-    this.latest = { tops, hashes };
+    this.latest = { tops, hashes, from, to };
     this.sentLines.set(seq, this.latest);
     for (const old of this.sentLines.keys()) {
       if (this.sentLines.size <= MAX_LINES) break;
@@ -123,15 +138,47 @@ export class DomInk {
     this.follow();
   }
 
-  /** Where each stroke's line is now against where it was drawn for. Text edited since: the helper's to work out. */
+  /** Follow measured lines and unchanged text references; keep the last valid projection during ambiguous edits. */
   private follow() {
-    const from = this.sentLines.get(this.drawnFor);
+    const from = this.drawnLines ?? this.sentLines.get(this.drawnFor);
     const to = this.latest;
     const same = !!from && !!to && this.linesPath === this.path && from.hashes.length === to.hashes.length
       && from.hashes.every((h, i) => h === to.hashes[i]);
+    const oldCounts = new Map<number, number>();
+    const newPositions = new Map<number, number[]>();
+    if (!same && from && to) {
+      for (const hash of from.hashes) if (hash) oldCounts.set(hash, (oldCounts.get(hash) ?? 0) + 1);
+      to.hashes.forEach((hash, i) => {
+        if (!hash) return;
+        const positions = newPositions.get(hash) ?? [];
+        positions.push(i); newPositions.set(hash, positions);
+      });
+    }
+    const resolved = new Map<number, number>();
+    const resolve = (line: number): number => {
+      if (!from || !to || line < 0 || line >= from.hashes.length) return -1;
+      if (same) return line;
+      // Use a unique reference above the anchor, like the helper; fall back to one below. Unknown
+      // or ambiguous edits retain the last valid projection until a matching helper snapshot arrives.
+      for (const step of [-1, 1]) {
+        for (let i = step < 0 ? line : line + 1; i >= 0 && i < from.hashes.length; i += step) {
+          const hash = from.hashes[i], positions = newPositions.get(hash);
+          if (oldCounts.get(hash) === 1 && positions?.length === 1) return positions[0] + line - i;
+        }
+      }
+      return -1;
+    };
+    const relocate = (line: number) => {
+      if (!resolved.has(line)) resolved.set(line, resolve(line));
+      return resolved.get(line)!;
+    };
     for (const entry of this.strokes.values()) {
-      const by = same && entry.line >= 0 && entry.line < to.tops.length ? to.tops[entry.line] - from.tops[entry.line] : 0;
-      const move = Math.abs(by) < 0.25 ? 0 : by;
+      const line = this.linesPath === this.path ? relocate(entry.line) : -1;
+      if (!from || !to || line < (to.from ?? 0) || line > (to.to ?? to.tops.length - 1)
+        || line < 0 || line >= to.tops.length) continue;
+      const by = to.tops[line] - (entry.top ?? from.tops[entry.line]);
+      if (!Number.isFinite(by)) continue;
+      const move = Math.abs(by) < 1e-9 ? 0 : by;
       if (move === entry.moved) continue;
       entry.moved = move;
       if (move) entry.el.setAttribute("transform", `translate(0 ${move})`);
@@ -155,7 +202,7 @@ export class DomInk {
    * image pixels) to CSS px: it then scrolls with the pages, where the ink window chasing them lagged and
    * bounced. `positioned`: the element is a containing block already, so its CSS is left alone.
    */
-  mount(host: HTMLElement | null, inkPath: string | null, at?: { left: number; top: number; scale: number; positioned?: boolean }) {
+  mount(host: HTMLElement | null, inkPath: string | null, at?: { left: number; top: number; scale: number; positioned?: boolean; matrix?: number[] }) {
     if (!host || !inkPath || inkPath !== this.path) {
       this.svg.remove();
       return;
@@ -165,13 +212,13 @@ export class DomInk {
       host.appendChild(this.svg);
       this.svg.style.visibility = this.nativeShown ? "hidden" : "";
     }
-    const place = at ? `${Math.round(at.left * 100) / 100}|${Math.round(at.top * 100) / 100}|${at.scale}` : "";
+    const place = at ? `${at.left}|${at.top}|${at.scale}|${at.matrix?.join(",") ?? ""}` : "";
     if (place !== this.placed) {
       this.placed = place;
       this.svg.style.left = at ? `${at.left}px` : "";
       this.svg.style.top = at ? `${at.top}px` : "";
       this.svg.style.transformOrigin = at ? "0 0" : "";
-      this.svg.style.transform = at ? `scale(${at.scale})` : "";
+      this.svg.style.transform = at?.matrix ? `matrix(${at.matrix.join(",")})` : at ? `scale(${at.scale})` : "";
     }
   }
 
@@ -179,5 +226,157 @@ export class DomInk {
 
   destroy() {
     this.svg.remove();
+  }
+}
+
+interface Pane { ink: DomInk; path: string; host: HTMLElement | null; at?: Parameters<DomInk["mount"]>[2] }
+export interface NativeInk { path: string; viewId?: string; visible: boolean; id?: number }
+
+/** One passive drawing per visible view, sharing immutable snapshots rather than moving one SVG around. */
+export class InkPanes {
+  private panes = new Map<object, Pane>();
+  private snapshots = new Map<string, DomUpdate>();
+  private stale = new Set<string>();
+  private active: object | null = null;
+  private viewId = "";
+  private pending: NativeInk | null = null;
+  private ackFrame = 0;
+  private nativeEpoch = -1;
+  private versions = new Map<string, number>();
+  private clock = 0;
+
+  constructor(private acknowledge: (message: NativeInk) => void) {}
+
+  select(key: object | null, viewId: string) {
+    if (key === this.active && viewId === this.viewId) return;
+    const old = this.active && this.panes.get(this.active);
+    if (old) old.ink.setNative(old.path, false);
+    this.active = key;
+    this.viewId = viewId;
+    this.cancelAck();
+  }
+
+  has(path: string): boolean { return this.snapshots.has(path) && !this.stale.has(path); }
+  snapshotToken(path: string): number {
+    if (!this.versions.has(path)) this.versions.set(path, ++this.clock);
+    return this.versions.get(path)!;
+  }
+  invalidate(path: string) { this.versions.set(path, ++this.clock); this.stale.add(path); }
+  invalidateAll() { for (const path of new Set([...this.snapshots.keys(), ...this.versions.keys()])) this.invalidate(path); }
+  seed(update: DomUpdate, token?: number): boolean {
+    if (!update.path || this.has(update.path) || token !== undefined && this.versions.get(update.path) !== token) return false;
+    this.update(update);
+    return true;
+  }
+
+  update(update: DomUpdate) {
+    const path = update.path;
+    if (!path) return;
+    this.versions.set(path, ++this.clock);
+    const previous = update.reset ? undefined : this.snapshots.get(path);
+    const strokes = new Map((previous?.add ?? []).map(s => [s.id, s]));
+    for (const stroke of update.add ?? []) strokes.set(stroke.id, stroke);
+    const order = update.order ?? [...strokes.keys()];
+    const full = { ...update, reset: true, order, add: order.flatMap(id => strokes.has(id) ? [strokes.get(id)!] : []) };
+    this.snapshots.set(path, full);
+    this.stale.delete(path);
+    for (const pane of this.panes.values()) if (pane.path === path) {
+      pane.ink.update(previous ? update : full);
+      pane.ink.mount(pane.host, path, pane.at);
+    }
+  }
+
+  mount(host: HTMLElement | null, path: string | null, at?: Parameters<DomInk["mount"]>[2]) {
+    if (this.active) this.mountFor(this.active, host, path, at);
+  }
+
+  mountFor(key: object, host: HTMLElement | null, path: string | null, at?: Parameters<DomInk["mount"]>[2]) {
+    let pane = this.panes.get(key);
+    if (!path || pane && pane.path !== path) {
+      pane?.ink.destroy();
+      this.panes.delete(key);
+      pane = undefined;
+    }
+    if (!path) return;
+    if (!pane) {
+      pane = { ink: new DomInk(), path, host, at };
+      this.panes.set(key, pane);
+      const snapshot = this.snapshots.get(path);
+      if (snapshot) pane.ink.update(snapshot);
+    }
+    pane.host = host;
+    pane.at = at;
+    pane.ink.mount(host, path, at);
+  }
+
+  moveLines(path: string, seq: number, tops: number[], hashes: number[], from = 0, to = tops.length - 1) {
+    if (this.active) this.moveLinesFor(this.active, path, seq, tops, hashes, from, to);
+  }
+
+  moveLinesFor(key: object, path: string, seq: number, tops: number[], hashes: number[], from = 0, to = tops.length - 1) {
+    this.panes.get(key)?.ink.moveLines(path, seq, tops, hashes, from, to);
+  }
+
+  setNative(message: NativeInk) {
+    if (!this.active || message.viewId !== this.viewId) return;
+    if (message.id !== undefined && message.id < this.nativeEpoch) return;
+    const pane = this.panes.get(this.active);
+    if (!pane || message.path !== pane.path) return;
+    if (message.id !== undefined) this.nativeEpoch = message.id;
+    this.cancelAck();
+    pane.ink.setNative(message.path, message.visible);
+    if (message.visible || message.id === undefined) return;
+    this.pending = message;
+    // The second frame runs after the first has painted. A busy/hidden page keeps native ink until ready.
+    let painted = false;
+    const check = () => {
+      if (this.pending !== message) return;
+      if (pane.ink.ready && painted) {
+        this.pending = null;
+        this.ackFrame = 0;
+        this.acknowledge(message);
+        return;
+      }
+      painted = pane.ink.ready;
+      this.ackFrame = requestAnimationFrame(check);
+    };
+    this.ackFrame = requestAnimationFrame(check);
+  }
+
+  releaseNative() {
+    this.cancelAck();
+    this.nativeEpoch = -1;
+    for (const pane of this.panes.values()) pane.ink.setNative(pane.path, false);
+  }
+
+  prune(visible: Set<object>) {
+    for (const [key, pane] of this.panes) if (!visible.has(key)) {
+      pane.ink.destroy();
+      this.panes.delete(key);
+    }
+    const used = new Set([...this.panes.values()].map(p => p.path));
+    for (const path of this.snapshots.keys()) if (!used.has(path)) {
+      this.snapshots.delete(path);
+      this.stale.delete(path);
+    }
+    for (const path of this.versions.keys()) if (!used.has(path)) {
+      this.versions.delete(path);
+      this.stale.delete(path);
+    }
+  }
+
+  private cancelAck() {
+    if (this.ackFrame) cancelAnimationFrame(this.ackFrame);
+    this.ackFrame = 0;
+    this.pending = null;
+  }
+
+  destroy() {
+    this.releaseNative();
+    for (const pane of this.panes.values()) pane.ink.destroy();
+    this.panes.clear();
+    this.snapshots.clear();
+    this.stale.clear();
+    this.versions.clear();
   }
 }

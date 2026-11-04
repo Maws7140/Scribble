@@ -1,5 +1,6 @@
 import { FileView, MarkdownView, View } from "obsidian";
 import { isDarkTheme } from "./settings";
+import { imageCoordinates } from "./coordinates";
 
 /** What the ink layer can sit on: a note, a PDF in Obsidian's PDF viewer, an image in its image view, or a canvas. */
 export type InkKind = "markdown" | "pdf" | "image" | "canvas";
@@ -25,7 +26,8 @@ export interface ContentLayout {
    * and the content's top-left inside it (CSS px). `positioned`: the element is already a containing block
    * (leave its CSS alone).
    */
-  inkHost?: { el: HTMLElement; left: number; top: number; positioned: boolean; scale?: number };
+  inkHost?: { el: HTMLElement; left: number; top: number; positioned: boolean; scale?: number; matrix?: number[] };
+  transform?: number[];
   ox: number;
   oy: number;
   zoom: number;
@@ -86,8 +88,13 @@ export function imageLayout(view: FileView): ContentLayout | null {
   // Ink in image pixels: it stays on the same spot of the picture at any size. Pictures aren't recoloured.
   // The in-page copy goes beside the picture, in its container (which scrolls with it).
   const box = img.parentElement;
-  const inkHost = box ? (() => { const b = box.getBoundingClientRect(); return { el: box, left: r.left - b.left - box.clientLeft, top: r.top - b.top - box.clientTop, positioned: false }; })() : undefined;
-  return { area, inkHost, ox: r.left - area.left, oy: r.top - area.top, zoom: r.width / img.naturalWidth, tops: [0], hashes: [1], source: "image", dark: false };
+  const coordinates = box ? imageCoordinates(img, box) : null;
+  if (!box || !coordinates) return null;
+  const { visual: m, local: local } = coordinates;
+  const zoom = Math.hypot(m.a, m.b);
+  const inkHost = { el: box, left: 0, top: 0, positioned: true, matrix: [local.a, local.b, local.c, local.d, local.e, local.f] };
+  return { area, inkHost, ox: m.e - area.left, oy: m.f - area.top, zoom, transform: [m.a, m.b, m.c, m.d],
+    tops: [0], hashes: [1], source: "image", dark: false };
 }
 
 /**

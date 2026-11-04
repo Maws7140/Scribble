@@ -58,6 +58,8 @@ export interface InkSettings {
   hideInkInSource: boolean;
   /** In a split pane (or with a sidebar open) the note keeps its full-width page and scrolls sideways. */
   keepPageWidth: boolean;
+  /** Canonical workspace width per Markdown path; retained across window sizes and sessions. */
+  pageWidths: Record<string, number>;
   /** The ink tools sit in the Editing Toolbar plugin's top bar instead of a bar of their own. */
   inEditingToolbar: boolean;
   /** Toolbar buttons taken off the toolbar (ids from TOOLBAR_BUTTONS). */
@@ -154,6 +156,7 @@ export const DEFAULT_SETTINGS: InkSettings = {
   touchInk: false,
   hideInkInSource: true,
   keepPageWidth: true,
+  pageWidths: {},
   inEditingToolbar: false,
   hiddenTools: [],
   recent: [],

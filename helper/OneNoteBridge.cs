@@ -197,6 +197,7 @@ public sealed partial class OverlayWindow
         }
         finally { importing = false; }
         AnchorLegacy(add.ToList());
+        foreach (var stroke in add) document.MarkGeometry(stroke);
         if (papers != null) ShowOnCards(add);
         edited = false; // this came from OneNote; nothing to send back
         FlushSave();
@@ -305,6 +306,7 @@ public sealed partial class OverlayWindow
         finally { importing = false; }
         // OneNote doesn't keep our line anchors: re-anchor the pulled ink, strokes that touch together.
         AnchorLegacy(pulled.ToList());
+        foreach (var stroke in pulled) document.MarkGeometry(stroke);
         edited = false; // this came from OneNote; nothing to send back
         FlushSave();
         SendExtent();
@@ -334,7 +336,7 @@ public sealed partial class OverlayWindow
             var target = Path.Combine(dir, $"{DateTime.Now:yyyyMMdd-HHmmss}-{Path.GetFileName(path)}");
             if (path == inkPath)
             {
-                var copy = ink.Strokes.Clone();
+                var copy = document.Snapshot(ink.Strokes);
                 ToTrueColors(copy);
                 using var fs = File.Create(target);
                 copy.Save(fs, true);

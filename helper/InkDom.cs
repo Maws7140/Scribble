@@ -46,7 +46,10 @@ public sealed partial class OverlayWindow
 
     /// <summary>The plugin has been told the native layer is up (so it hid its copy).</summary>
     bool toldNative = true;
-    DispatcherTimer lingerTimer = null!, tellTimer = null!, hideTimer = null!;
+    DispatcherTimer lingerTimer = null!;
+    int handoffGeneration;
+    int awaitingDomPaint;
+    EventHandler? nativePaint;
 
     void InitInkDom()
     {
@@ -55,23 +58,7 @@ public sealed partial class OverlayWindow
         // After the pen leaves, the native layer stays a moment (the pen often comes straight back).
         lingerTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1500) };
         lingerTimer.Tick += (_, _) => { lingerTimer.Stop(); if (!WantNative()) HandOffToNote(); };
-        // Each layer hands over only once the other is on screen: never a frame with no ink.
-        tellTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(60) };
-        tellTimer.Tick += (_, _) =>
-        {
-            tellTimer.Stop();
-            if (!nativeShown || toldNative || !WantNative()) return;
-            toldNative = true;
-            Protocol.Send(new { type = "ink-native", path = inkPath, visible = true });
-        };
-        hideTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(120) };
-        hideTimer.Tick += (_, _) =>
-        {
-            hideTimer.Stop();
-            if (toldNative || WantNative() || replaying) return;
-            nativeShown = false;
-            ink.Visibility = Visibility.Hidden;
-        };
+        Closed += (_, _) => CancelHandoff();
         ink.SelectionChanged += (_, _) => UpdateNativeVisibility();
     }
 
@@ -108,30 +95,73 @@ public sealed partial class OverlayWindow
         if (WantNative())
         {
             lingerTimer.Stop();
-            hideTimer.Stop();
+            if (awaitingDomPaint != 0) CancelHandoff();
             if (!nativeShown)
             {
                 nativeShown = true;
                 ink.Visibility = Visibility.Visible;
             }
-            if (!toldNative && !tellTimer.IsEnabled) tellTimer.Start();
+            if (!toldNative) QueueNativePaint();
             return;
         }
-        if (!nativeShown || (!toldNative && hideTimer.IsEnabled)) return;
+        if (!nativeShown || awaitingDomPaint != 0) return;
         if (scrolled) { HandOffToNote(); return; }
         if (!lingerTimer.IsEnabled) lingerTimer.Start();
     }
 
     void HandOffToNote()
     {
+        if (!domInk || awaitingDomPaint != 0) return;
         lingerTimer.Stop();
-        tellTimer.Stop();
+        CancelHandoff();
         publishTimer.Stop();
         PublishInk();
         toldNative = false;
-        Protocol.Send(new { type = "ink-native", path = inkPath, visible = false });
-        hideTimer.Stop();
-        hideTimer.Start();
+        awaitingDomPaint = ++handoffGeneration;
+        Protocol.Send(new { type = "ink-native", path = inkPath, viewId = layout?.ViewId,
+            visible = false, id = awaitingDomPaint });
+    }
+
+    void CancelHandoff()
+    {
+        handoffGeneration++;
+        awaitingDomPaint = 0;
+        if (nativePaint != null) CompositionTarget.Rendering -= nativePaint;
+        nativePaint = null;
+    }
+
+    /// <summary>The native frame is submitted before the browser is told to hide its copy.</summary>
+    void QueueNativePaint()
+    {
+        if (nativePaint != null || !IsVisible) return;
+        int generation = handoffGeneration;
+        var path = inkPath;
+        var view = layout?.ViewId;
+        nativePaint = (_, _) =>
+        {
+            CompositionTarget.Rendering -= nativePaint;
+            nativePaint = null;
+            Dispatcher.BeginInvoke(DispatcherPriority.Background, () =>
+            {
+                if (generation != handoffGeneration || !nativeShown || !IsVisible || (!ink.IsVisible && !replaying)
+                    || (!WantNative() && !replaying) || path != inkPath || view != layout?.ViewId) return;
+                toldNative = true;
+                Protocol.Send(new { type = "ink-native", path, viewId = view, visible = true, id = generation });
+            });
+        };
+        CompositionTarget.Rendering += nativePaint;
+        ink.InvalidateVisual();
+    }
+
+    void DomPainted(Command cmd)
+    {
+        if (awaitingDomPaint == 0 || cmd.Id != awaitingDomPaint || cmd.InkPath != inkPath
+            || cmd.ViewId != layout?.ViewId || WantNative() || replaying) return;
+        // A layout/ink change since the request needs a fresh snapshot and acknowledgement.
+        if (publishTimer.IsEnabled) { awaitingDomPaint = 0; HandOffToNote(); return; }
+        awaitingDomPaint = 0;
+        nativeShown = false;
+        ink.Visibility = Visibility.Hidden;
     }
     /// <summary>
     /// The note's copy brought up to date: the strokes in drawing order (by id), with the outline (as Windows
@@ -146,12 +176,15 @@ public sealed partial class OverlayWindow
         domReset = false;
         var order = new System.Collections.Generic.List<int>(ink.Strokes.Count);
         var lines = new System.Collections.Generic.List<int>(ink.Strokes.Count);
+        var anchorTops = new System.Collections.Generic.List<double>(ink.Strokes.Count);
         var add = new System.Collections.Generic.List<object>();
         foreach (var s in ink.Strokes)
         {
             var id = IdOf(s);
             order.Add(id.Id);
-            lines.Add(TryGetAnchor(s, out var line, out _) ? line : -1);
+            bool anchored = TryGetAnchor(s, out var line, out var top);
+            lines.Add(anchored ? line : -1);
+            anchorTops.Add(anchored ? top : 0);
             if (id.Sent && !reset) continue;
             id.Sent = true;
             var da = s.DrawingAttributes;
@@ -174,7 +207,7 @@ public sealed partial class OverlayWindow
                 hl = da.IsHighlighter,
             });
         }
-        Protocol.Send(new { type = "ink-svg", path = inkPath, reset, order, add, seq = linesSeq, lines });
+        Protocol.Send(new { type = "ink-svg", path = inkPath, reset, order, add, seq = linesSeq, lines, anchorTops, tops, hashes });
     }
 
     static string N(double v) => Math.Round(v, 2).ToString("0.##", CultureInfo.InvariantCulture);
