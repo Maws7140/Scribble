@@ -580,7 +580,8 @@
   z-index: -1;
   pointer-events: none;
   background-image: linear-gradient(to bottom, transparent calc(100% - var(--oni-rule-width)), var(--oni-rule-color) calc(100% - var(--oni-rule-width)));
-  background-size: 100% var(--oni-rule-pitch);
+  /* A small tile, like the grids: one as wide as the board (100%) is too big to paint at some zooms. */
+  background-size: var(--oni-rule-pitch) var(--oni-rule-pitch);
   background-position: 0 var(--oni-rule-phase);
 }
 .canvas > .oni-canvas-lines.is-grid {
