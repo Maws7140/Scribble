@@ -2278,17 +2278,17 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
     const off = !this.settings.keepPageWidth || !scroller || !root || !inkPath || view.containerEl.win !== window;
     const pagePath = view.file?.path ?? inkPath ?? "";
     const widths = this.settings.pageWidths ??= {};
-    // A note with no ink has nothing to keep lined up: it lays out like any other, and its page is only fixed
-    // from when it gets ink. (Fixed from the first time it was opened, a note first seen in a narrow window
-    // stayed that narrow, against the left of every wider one.)
-    const inked = !!view.file && !!this.app.vault.getFileByPath(inkFileFor(view.file.path, "markdown"));
-    if (off || !inked) {
+    if (off) {
       if (sizer.hasClass("oni-page")) this.unkeepPageWidth(sizer);
-      if (!off && pagePath && widths[pagePath] !== undefined) {
-        delete widths[pagePath];
-        this.persist();
-      }
       return;
+    }
+    // A note with no ink has nothing to keep lined up, so its page is the window as it is now, and only gets
+    // fixed once it has ink. (Fixed the first time it was opened, a note first seen in a narrow window stayed
+    // that narrow, against the left of every wider one.)
+    const inked = !!view.file && !!this.app.vault.getFileByPath(inkFileFor(view.file.path, "markdown"));
+    if (!inked && widths[pagePath] !== undefined) {
+      delete widths[pagePath];
+      this.persist();
     }
     const cs = getComputedStyle(scroller);
     const padLeft = parseFloat(cs.paddingLeft) || 0;
@@ -2299,11 +2299,11 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
       .reduce((width, dock) => width + ((dock as unknown as { containerEl?: HTMLElement })
         ?.containerEl?.getBoundingClientRect().width ?? 0), 0);
     const availableWidth = root.getBoundingClientRect().width + docks;
-    if (!Number.isFinite(widths[pagePath]) || widths[pagePath] < 200) {
+    if (inked && (!Number.isFinite(widths[pagePath]) || widths[pagePath] < 200)) {
       widths[pagePath] = availableWidth;
       this.persist();
     }
-    const fullWidth = widths[pagePath];
+    const fullWidth = inked ? widths[pagePath] : availableWidth;
     const wider = fullWidth - view.containerEl.getBoundingClientRect().width;
     // clientWidth rounds fractional sidebar/split widths. Use the fractional box and subtract the
     // scrollbar/border gutter, or opening a 296.5 px dock changes the supposedly fixed page by 1 px.
