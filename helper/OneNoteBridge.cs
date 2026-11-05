@@ -237,6 +237,9 @@ public sealed partial class OverlayWindow
     void PollOneNote(PollRequest? req)
     {
         if (req == null || req.Pages.Count == 0 || DateTime.UtcNow < pollPausedUntil) return;
+        // Only while OneNote is open. Asking a closed OneNote starts it in the background, at every check, and now
+        // and then that start crashes. Edits made on other devices only reach this PC once OneNote is open anyway.
+        if (!OneNote.IsRunning()) return;
         RunOneNote(() =>
         {
             var changed = OneNoteSync.ChangedPages(OneNote.Connect(), req.Pages.Select(p => (p.NoteKey, p.PageId, p.LastModified)));

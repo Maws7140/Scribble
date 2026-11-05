@@ -15,6 +15,14 @@ public static class OneNote
 
     internal static IOneNoteApplication Connect() => (IOneNoteApplication)new OneNoteApplicationClass();
 
+    /// <summary>OneNote is open (Connect would otherwise start it).</summary>
+    internal static bool IsRunning()
+    {
+        var running = System.Diagnostics.Process.GetProcessesByName("ONENOTE");
+        foreach (var p in running) p.Dispose();
+        return running.Length > 0;
+    }
+
     internal static XDocument Hierarchy(IOneNoteApplication app, string startId = "", int scope = HsSections)
     {
         app.GetHierarchy(startId, scope, out var xml, Xs2013);
