@@ -2276,8 +2276,18 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
     const scroller = sizer.closest<HTMLElement>(".cm-scroller, .markdown-preview-view");
     const root = (this.app.workspace as unknown as { rootSplit?: { containerEl: HTMLElement } }).rootSplit?.containerEl;
     const off = !this.settings.keepPageWidth || !scroller || !root || !inkPath || view.containerEl.win !== window;
-    if (off) {
+    const pagePath = view.file?.path ?? inkPath ?? "";
+    const widths = this.settings.pageWidths ??= {};
+    // A note with no ink has nothing to keep lined up: it lays out like any other, and its page is only fixed
+    // from when it gets ink. (Fixed from the first time it was opened, a note first seen in a narrow window
+    // stayed that narrow, against the left of every wider one.)
+    const inked = !!view.file && !!this.app.vault.getFileByPath(inkFileFor(view.file.path, "markdown"));
+    if (off || !inked) {
       if (sizer.hasClass("oni-page")) this.unkeepPageWidth(sizer);
+      if (!off && pagePath && widths[pagePath] !== undefined) {
+        delete widths[pagePath];
+        this.persist();
+      }
       return;
     }
     const cs = getComputedStyle(scroller);
@@ -2289,8 +2299,6 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
       .reduce((width, dock) => width + ((dock as unknown as { containerEl?: HTMLElement })
         ?.containerEl?.getBoundingClientRect().width ?? 0), 0);
     const availableWidth = root.getBoundingClientRect().width + docks;
-    const pagePath = view.file?.path ?? inkPath;
-    const widths = this.settings.pageWidths ??= {};
     if (!Number.isFinite(widths[pagePath]) || widths[pagePath] < 200) {
       widths[pagePath] = availableWidth;
       this.persist();
@@ -2300,10 +2308,13 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
     // clientWidth rounds fractional sidebar/split widths. Use the fractional box and subtract the
     // scrollbar/border gutter, or opening a 296.5 px dock changes the supposedly fixed page by 1 px.
     const gutter = scroller.offsetWidth - scroller.clientWidth;
-    const inner = Math.max(200, Math.round(scroller.getBoundingClientRect().width - gutter - pad + wider));
+    const shown = scroller.getBoundingClientRect().width - gutter - pad;
+    const inner = Math.max(200, Math.round(shown + wider));
+    // Kept narrower than the pane it's in now (first inked in a smaller window): in the middle of it, not at its left.
+    const slack = Math.max(0, Math.floor((shown - inner) / 2));
     const ink = this.inkSides.get(inkPath);
     const readable = sizer.closest(".is-readable-line-width") !== null;
-    const key = `${inner}|${readable}|${ink?.left ?? 0}|${ink?.right ?? 0}`;
+    const key = `${inner}|${slack}|${readable}|${ink?.left ?? 0}|${ink?.right ?? 0}`;
     if (sizer.dataset.oniPage === key) return;
 
     // The theme's own page width at that size: its max-width (a length, a percentage, or none).
@@ -2315,7 +2326,7 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
     const margin = Math.floor((inner - page) / 2);
     // Out to the ink on either side (page px), never wider than the screen.
     const most = Math.max(inner, Math.round((window.screen?.availWidth || inner) - pad));
-    const left = Math.max(0, Math.min(Math.max(margin, ink && ink.left < 0 ? Math.ceil(-ink.left) + 24 : 0), most - page));
+    const left = slack + Math.max(0, Math.min(Math.max(margin, ink && ink.left < 0 ? Math.ceil(-ink.left) + 24 : 0), most - page));
     const reach = Math.max(page + margin, Math.min(most - left, ink ? Math.ceil(ink.right) + 24 : 0));
 
     sizer.dataset.oniPage = key;
