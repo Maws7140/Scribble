@@ -15,12 +15,16 @@ public static class OneNote
 
     internal static IOneNoteApplication Connect() => (IOneNoteApplication)new OneNoteApplicationClass();
 
-    /// <summary>OneNote is open (Connect would otherwise start it).</summary>
+    /// <summary>
+    /// You have OneNote open: it has a window. (Connect would otherwise start it. A OneNote started in the background
+    /// for a send has none, and it closes once it's idle; counting it would keep it running.)
+    /// </summary>
     internal static bool IsRunning()
     {
         var running = System.Diagnostics.Process.GetProcessesByName("ONENOTE");
+        bool open = running.Any(p => p.MainWindowHandle != IntPtr.Zero);
         foreach (var p in running) p.Dispose();
-        return running.Length > 0;
+        return open;
     }
 
     internal static XDocument Hierarchy(IOneNoteApplication app, string startId = "", int scope = HsSections)
