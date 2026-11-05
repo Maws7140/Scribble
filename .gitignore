@@ -9,3 +9,5 @@ harness/
 # Self-tests, probes, test data and the testing checklist stay local
 helper/Tests/
 TESTING.md
+helper/publish-*/
+installer/output/

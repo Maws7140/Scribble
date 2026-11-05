@@ -225,6 +225,9 @@ public static partial class Program
         Application.Current.Shutdown(RestartExitCode);
     }
 
+    /// <summary>What the plugin and the helper say to each other changed in a way the other must know: raise it with the plugin's HELPER_PROTOCOL.</summary>
+    public const int ProtocolVersion = 1;
+
     [STAThread]
     public static int Main(string[] args)
     {
@@ -245,6 +248,8 @@ public static partial class Program
         if (!args.Contains("--gpu")) System.Windows.Media.RenderOptions.ProcessRenderMode = System.Windows.Interop.RenderMode.SoftwareOnly;
         Protocol.StartLog();
         Protocol.Log("helper started");
+        // What it is, so the plugin can tell a helper that doesn't match it (it raises its own number with this).
+        Protocol.Send(new { type = "hello", version = typeof(Program).Assembly.GetName().Version?.ToString(3), protocol = ProtocolVersion });
         Mark("log");
         var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         Mark("WPF");

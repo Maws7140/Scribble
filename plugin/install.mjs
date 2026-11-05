@@ -1,4 +1,5 @@
-// Copies the built plugin and the published ink helper into a vault.
+// Copies the built plugin into a vault, and the published ink helper to where its installer puts it
+// (%LOCALAPPDATA%\Programs\OneNote Ink), which is where the plugin looks for it first.
 // Usage: node install.mjs <vault path>
 import { cpSync, mkdirSync, existsSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "fs";
 import { join, dirname } from "path";
@@ -22,7 +23,8 @@ mkdirSync(dest, { recursive: true });
 for (const f of ["main.js", "manifest.json", "styles.css"]) cpSync(join(here, f), join(dest, f));
 // A running helper locks its files, but Windows lets us rename them. Move the old build aside
 // (the running process keeps using it) and clean up leftovers from earlier installs when unlocked.
-const helperDest = join(dest, "helper");
+const helperDest = process.env.LOCALAPPDATA ? join(process.env.LOCALAPPDATA, "Programs", "OneNote Ink") : join(dest, "helper");
+mkdirSync(helperDest, { recursive: true });
 if (existsSync(helperDest)) {
   for (const f of readdirSync(helperDest)) {
     const p = join(helperDest, f);
@@ -35,7 +37,7 @@ if (existsSync(helperDest)) {
 }
 // Never ship a log from local runs/self-tests over the vault's own log.
 cpSync(helper, helperDest, { recursive: true, filter: (src) => !/helper\.log/.test(src) });
-console.log("Installed to " + dest);
+console.log("Installed to " + dest + "; helper in " + helperDest);
 
 // The testing checklist goes in the vault ("Ink Tests/Ink testing checklist.md") so it can be ticked off in
 // Obsidian. Updating it keeps every box already ticked (matched by its text) and adds the new ones.

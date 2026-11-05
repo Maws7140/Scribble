@@ -23,6 +23,7 @@ import { CanvasTouch, TouchCanvas } from "./canvastouch";
 import { ruleCanvas } from "./canvaslines";
 import { InkPrint, PrintReference, PrintStroke } from "./print";
 import { clearCoordinateProbes } from "./coordinates";
+import { HELPER_DOWNLOAD, HELPER_PROTOCOL, HelperProblem, HelperSetupModal, copyOldBackups, findHelper } from "./helperinstall";
 
 /**
  * Drives a native Windows Ink overlay (helper/InkOverlay.exe) that sits over the active note.
@@ -94,6 +95,15 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
   private printId = 0;
   private printRequests = new Map<number, { resolve: (snapshot: string | null) => void; reject: (error: Error) => void }>();
   private printWorkers = new Set<ChildProcessWithoutNullStreams>();
+  /** Why there's no helper running (see startHelper), and what was said about it this session. */
+  helperProblem: HelperProblem | null = null;
+  private helperProblemShown = new Set<HelperProblem>();
+  /** The running helper: where it is and what version it said it is. */
+  helperPath = "";
+  helperVersion = "";
+  private helloTimer = 0;
+  private setupModal: HelperSetupModal | null = null;
+  private outdatedStamp = 0;
 
   async onload() {
     await this.loadSettings();
@@ -101,6 +111,8 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
     this.handwriting = new HandwritingIndex(this.app, `${this.manifest.dir}/handwriting-index.json`);
     this.startHelper();
     this.sendTool();
+    // Installed (or updated) while Obsidian is open: start it as soon as it's there.
+    this.registerInterval(window.setInterval(() => this.retryHelper(), 3000));
 
     this.addSettingTab(new InkSettingTab(this.app, this));
     this.registerMarkdownPostProcessor((el, ctx) => this.printing.process(el, ctx), 10000);
@@ -429,7 +441,8 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
         this.send({ type: "print-snapshot", id, inkPath: this.inkPathFor(base, file.path) });
       });
     }
-    const exe = path.join(base, this.manifest.dir!, "helper", "InkOverlay.exe");
+    const exe = findHelper(this.pluginDir());
+    if (!exe) throw new Error("OneNote Ink: the ink helper isn't installed, so the ink can't go in the PDF.");
     return new Promise<PrintStroke[]>((resolve, reject) => {
       const proc = spawn(exe, ["--print-ink"], { stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
       this.printWorkers.add(proc);
@@ -554,9 +567,22 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
    * screen, so the ink never disappears while it starts (see promoteStandby).
    */
   private startHelper(asStandby = false) {
-    const base = this.vaultPath();
-    if (!base || !this.manifest.dir) return;
-    const exe = path.join(base, this.manifest.dir, "helper", "InkOverlay.exe");
+    if (process.platform !== "win32") {
+      this.helperUnavailable("not-windows");
+      return;
+    }
+    if (this.helperProblem === "outdated") return;
+    const exe = findHelper(this.pluginDir());
+    if (!exe) {
+      this.helperUnavailable("missing");
+      return;
+    }
+    this.helperProblem = null;
+    if (!asStandby) {
+      copyOldBackups(this.pluginDir(), exe);
+      this.helperPath = exe;
+      this.helperVersion = "";
+    }
     let proc: ChildProcessWithoutNullStreams;
     try {
       proc = spawn(exe, this.settings.gpuRendering ? ["--gpu"] : [], { stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
@@ -566,7 +592,14 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
       return;
     }
     if (asStandby) this.standby = proc;
-    else this.helper = proc;
+    else {
+      this.helper = proc;
+      // A helper from before it said its version doesn't say anything: that's a mismatch too.
+      window.clearTimeout(this.helloTimer);
+      this.helloTimer = window.setTimeout(() => {
+        if (this.helper === proc && !this.helperVersion) this.helperUnavailable("outdated");
+      }, 15_000);
+    }
     let buffered = "";
     proc.stdout.setEncoding("utf8");
     proc.stdout.on("data", (chunk: string) => {
@@ -583,22 +616,24 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
     proc.on("error", (e) => {
       if (proc === this.standby) { this.standby = null; return; }
       if (proc !== this.helper) return;
-      new Notice("OneNote Ink helper failed: " + e.message);
       this.helper = null;
       this.domInk.releaseNative();
+      // Gone from under us (being updated, or uninstalled): start it again once it's back (see retryHelper).
+      if ((e as NodeJS.ErrnoException).code === "ENOENT") this.helperProblem = "missing";
+      else new Notice("OneNote Ink helper failed: " + e.message);
     });
     proc.on("exit", (code) => {
       if (proc === this.standby) { this.standby = null; return; }
       if (proc !== this.helper) return;
       this.helper = null;
       this.domInk.releaseNative();
-      if (this.unloading) return;
+      if (this.unloading || this.helperProblem) return;
       // The helper exits on purpose (code 75) when its pen input dies, e.g. after the Surface sleeps,
       // and may crash; either way bring up a fresh one. Give up if it's stuck in a crash loop.
       const now = Date.now();
       this.restarts = this.restarts.filter((t) => now - t < 60_000);
       if (this.restarts.length >= 5) {
-        new Notice("OneNote Ink: the ink helper keeps stopping. Details: .obsidian/plugins/onenote-ink/helper/helper.log");
+        new Notice(`OneNote Ink: the ink helper keeps stopping. Details: ${path.join(path.dirname(this.helperPath), "helper.log")}`);
         return;
       }
       this.restarts.push(now);
@@ -612,6 +647,50 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
         this.sendTool();
       }, code === 75 ? 100 : 1000);
     });
+  }
+
+  private pluginDir(): string | null {
+    const base = this.vaultPath();
+    return base && this.manifest.dir ? path.join(base, this.manifest.dir) : null;
+  }
+
+  /** No helper to run: say so once a session (the card for a missing or mismatched one; a notice off Windows). */
+  private helperUnavailable(problem: HelperProblem) {
+    this.helperProblem = problem;
+    if (problem === "outdated") {
+      const proc = this.helper;
+      this.helper = null;
+      proc?.kill();
+      try { this.outdatedStamp = fs.statSync(this.helperPath).mtimeMs; } catch { this.outdatedStamp = 0; }
+    }
+    if (this.helperProblemShown.has(problem)) return;
+    this.helperProblemShown.add(problem);
+    if (problem === "not-windows") new Notice("OneNote Ink needs Windows: its ink is Windows Ink.", 10_000);
+    else {
+      this.setupModal = new HelperSetupModal(this.app, problem);
+      this.setupModal.open();
+    }
+  }
+
+  /** Every few seconds while there's no helper: start it once it's installed, or once a mismatched one is replaced. */
+  private retryHelper() {
+    if (this.unloading || this.helper || !this.helperProblem || this.helperProblem === "not-windows") return;
+    const exe = findHelper(this.pluginDir());
+    if (!exe) return;
+    if (this.helperProblem === "outdated") {
+      let stamp = 0;
+      try { stamp = fs.statSync(exe).mtimeMs; } catch { return; }
+      if (exe === this.helperPath && stamp === this.outdatedStamp) return;
+    }
+    this.helperProblem = null;
+    // It's here now: the card asking for it can go.
+    this.setupModal?.close();
+    this.setupModal = null;
+    this.startHelper();
+    this.lastSent = "";
+    this.lastLines = "";
+    this.linesDirty = true;
+    this.sendTool();
   }
 
   /** A replacement helper, starting up next to the running one. */
@@ -679,6 +758,15 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
       return;
     }
     switch (msg.type) {
+      case "hello": {
+        const hello = msg as { version?: string; protocol?: number };
+        if (from === this.helper) this.helperVersion = hello.version ?? "?";
+        if (hello.protocol !== HELPER_PROTOCOL && (from === this.helper || from === this.standby)) {
+          if (from === this.standby) { this.standby?.kill(); this.standby = null; }
+          else this.helperUnavailable("outdated");
+        }
+        break;
+      }
       case "print-snapshot": {
         const request = this.printRequests.get(msg.id ?? -1);
         this.printRequests.delete(msg.id ?? -1);
@@ -2542,6 +2630,15 @@ class InkSettingTab extends PluginSettingTab {
     const { containerEl } = this;
     const s = this.plugin.settings;
     containerEl.empty();
+
+    const p = this.plugin;
+    const status = p.helperProblem === "not-windows" ? "Needs Windows: OneNote Ink's ink is Windows Ink."
+      : p.helperProblem === "missing" ? "Not installed. Download its installer and run it; the plugin picks it up within a few seconds."
+      : p.helperProblem === "outdated" ? "Doesn't match this version of the plugin. Download and run the helper for this version."
+      : p.helperVersion ? `Version ${p.helperVersion}, running from ${p.helperPath}`
+      : "Starting...";
+    const helper = new Setting(containerEl).setName("Ink helper").setDesc(status);
+    if (p.helperProblem !== "not-windows") helper.addButton((b) => b.setButtonText("Download").onClick(() => window.open(HELPER_DOWNLOAD)));
 
     new Setting(containerEl).setName("Pen").setHeading();
 

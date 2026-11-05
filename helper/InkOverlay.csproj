@@ -8,6 +8,8 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
     <AssemblyName>InkOverlay</AssemblyName>
+    <!-- The release's version; the installer and the plugin's manifest carry the same one. -->
+    <Version>0.0.1</Version>
     <RootNamespace>InkOverlay</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <RuntimeIdentifier>win-arm64</RuntimeIdentifier>
