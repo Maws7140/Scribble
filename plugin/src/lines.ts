@@ -208,14 +208,14 @@ export function forgetHeadingSpace() {
 /** The space Live Preview keeps above a heading. Themes set their own (Minimal halves Obsidian's), so ask. */
 function livePreviewHeadingSpace(): string {
   if (headingSpace !== null) return headingSpace;
-  const host = document.createElement("div");
+  const host = createDiv();
   host.className = "markdown-source-view mod-cm6 is-live-preview";
-  host.style.display = "none";
-  const editor = host.appendChild(document.createElement("div"));
+  host.hide();
+  const editor = host.appendChild(createDiv());
   editor.className = "cm-editor cm-s-obsidian";
-  const content = editor.appendChild(document.createElement("div"));
+  const content = editor.appendChild(createDiv());
   content.className = "cm-content";
-  const line = content.appendChild(document.createElement("div"));
+  const line = content.appendChild(createDiv());
   line.className = "cm-line HyperMD-header";
   document.body.appendChild(host);
   headingSpace = getComputedStyle(line).paddingTop;

@@ -482,6 +482,7 @@
 .oni-graph-stage canvas {
   display: block;
   cursor: grab;
+  touch-action: none;
 }
 .oni-graph-zoom {
   position: absolute;

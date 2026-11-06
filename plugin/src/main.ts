@@ -369,10 +369,10 @@ export default class ScribblePlugin extends Plugin implements ToolbarHost, MathH
     this.app.workspace.onLayoutReady(() => void loadMathJax());
 
     const tick = () => {
-      this.frame = requestAnimationFrame(tick);
+      this.frame = window.requestAnimationFrame(tick);
       this.sync();
     };
-    this.frame = requestAnimationFrame(tick);
+    this.frame = window.requestAnimationFrame(tick);
   }
 
   onunload() {
@@ -381,7 +381,7 @@ export default class ScribblePlugin extends Plugin implements ToolbarHost, MathH
     this.printRequests.clear();
     for (const proc of this.printWorkers) proc.kill();
     this.printWorkers.clear();
-    cancelAnimationFrame(this.frame);
+    window.cancelAnimationFrame(this.frame);
     for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
       if (leaf.view instanceof MarkdownView) clearBlankSpace(leaf.view);
     }
@@ -393,7 +393,7 @@ export default class ScribblePlugin extends Plugin implements ToolbarHost, MathH
       if (!proc) continue;
       // Closing stdin makes the helper save and exit; kill it if it doesn't.
       proc.stdin.end();
-      setTimeout(() => { if (proc.exitCode === null) proc.kill(); }, 2000);
+      window.setTimeout(() => { if (proc.exitCode === null) proc.kill(); }, 2000);
     }
     this.helper = null;
     this.standby = null;
@@ -785,7 +785,7 @@ export default class ScribblePlugin extends Plugin implements ToolbarHost, MathH
       edited?: boolean; retry?: boolean; quiet?: boolean; visible?: boolean; kind?: string; x?: number; y?: number; w?: number; h?: number; tipX?: number; tipY?: number; playing?: boolean;
     };
     try {
-      msg = JSON.parse(line);
+      msg = JSON.parse(line) as typeof msg;
     } catch {
       console.debug("[scribble]", line);
       return;
@@ -808,10 +808,10 @@ export default class ScribblePlugin extends Plugin implements ToolbarHost, MathH
         break;
       }
       case "onenote-pages":
-        this.onOneNotePages(msg as unknown as { ok?: boolean; error?: string; pages?: OneNotePage[] });
+        this.onOneNotePages(msg);
         break;
       case "onenote-imported":
-        void this.onOneNotePageRead(msg as unknown as { ok?: boolean; id?: number; error?: string; title?: string; cards?: ImportCard[]; strokes?: number; tempDir?: string; lastModified?: string });
+        void this.onOneNotePageRead(msg);
         break;
       case "history":
         this.toolbar.setHistory(!!msg.canUndo, !!msg.canRedo);
@@ -878,7 +878,7 @@ export default class ScribblePlugin extends Plugin implements ToolbarHost, MathH
         void this.onInsertSpace(msg.inkPath ?? "", msg.line ?? 0, msg.count ?? 0);
         break;
       case "edit-gesture":
-        this.onEditGesture(msg as EditGesture);
+        this.onEditGesture(msg);
         break;
       case "replay":
         this.toolbar.setReplay(!!msg.playing);
@@ -1952,7 +1952,7 @@ export default class ScribblePlugin extends Plugin implements ToolbarHost, MathH
     if (this.mergedCanvases.has(canvas)) return;
     this.mergedCanvases.add(canvas);
     const proto = Object.getPrototypeOf(canvas) as CanvasWithHistory;
-    const push = canvas.history.push;
+    const push = canvas.history.push.bind(canvas.history);
     for (const direction of ["undo", "redo"] as const) {
       canvas[direction] = () => {
         if (this.merged.watching(canvas.history) && this.merged.step(direction)) return;
@@ -1962,7 +1962,7 @@ export default class ScribblePlugin extends Plugin implements ToolbarHost, MathH
       };
     }
     canvas.history.push = (data: unknown) => {
-      push.call(canvas.history, data);
+      push(data);
       if (this.merged.watching(canvas.history)) this.merged.onPageStep();
     };
     canvas.updateHistoryUI = () => {
@@ -2214,7 +2214,7 @@ export default class ScribblePlugin extends Plugin implements ToolbarHost, MathH
     if (performance.now() - this.confirmingAt > 1000) {
       this.confirmingAt = performance.now();
       void this.app.vault.cachedRead(file).then((disk) => {
-        const same = (a: string) => a.replace(/^﻿/, "").replace(/\r\n?/g, "\n");
+        const same = (a: string) => a.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n");
         const current = view.getMode() === "preview" ? view.getViewData() : view.editor?.getValue() ?? "";
         if (view.file === file && same(disk) === same(current)) {
           this.loadedView = view;

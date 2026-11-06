@@ -76,7 +76,7 @@ export class DomInk {
       const kind = s.img ? "image" : "path";
       let entry = this.strokes.get(s.id);
       if (!entry || entry.el.tagName !== kind) {
-        entry = { el: document.createElementNS(SVG, kind) as SVGPathElement | SVGImageElement, hl: s.hl, line: -1, moved: 0 };
+        entry = { el: document.createElementNS<typeof kind>(SVG, kind), hl: s.hl, line: -1, moved: 0 };
         this.strokes.set(s.id, entry);
       }
       entry.hl = s.hl;
@@ -343,9 +343,9 @@ export class InkPanes {
         return;
       }
       painted = pane.ink.ready;
-      this.ackFrame = requestAnimationFrame(check);
+      this.ackFrame = window.requestAnimationFrame(check);
     };
-    this.ackFrame = requestAnimationFrame(check);
+    this.ackFrame = window.requestAnimationFrame(check);
   }
 
   releaseNative() {
@@ -371,7 +371,7 @@ export class InkPanes {
   }
 
   private cancelAck() {
-    if (this.ackFrame) cancelAnimationFrame(this.ackFrame);
+    if (this.ackFrame) window.cancelAnimationFrame(this.ackFrame);
     this.ackFrame = 0;
     this.pending = null;
   }

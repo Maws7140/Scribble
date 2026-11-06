@@ -51,11 +51,11 @@ The helper needs the .NET 10 SDK to build (it then runs without .NET installed, 
 
 ```bash
 cd plugin && npm install && npm run build
-node install.mjs "C:\path\to\your\vault"   # the plugin into the vault, a helper build into %LOCALAPPDATA%\Programs\Scribble
+node scripts/install.mjs "C:\path\to\your\vault"   # the plugin into the vault, a helper build into %LOCALAPPDATA%\Programs\Scribble
 ```
 
 ```powershell
-cd helper; dotnet publish -c Release -r win-x64 -o publish   # or -r win-arm64; install.mjs copies it from here
+cd helper; dotnet publish -c Release -r win-x64 -o publish   # or -r win-arm64; scripts/install.mjs copies it from here
 .\installer\build.ps1                                        # both helper installers, into installer\output
 ```
 

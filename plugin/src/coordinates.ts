@@ -5,11 +5,11 @@ const images = new WeakMap<HTMLImageElement, Probe>();
 
 function probe(host: HTMLElement, previous: Probe | undefined, style: string): Probe {
   const value = previous ?? (() => {
-    const root = document.createElement("div");
+    const root = createDiv();
     root.className = "oni-coordinate-probe";
     root.setAttribute("aria-hidden", "true");
     const points = [[0, 0], [100, 0], [0, 100], [100, 100]].map(([x, y]) => {
-      const point = document.createElement("span");
+      const point = createSpan();
       point.style.cssText = `position:absolute;inset:0 auto auto 0;inline-size:0;block-size:0;transform:translate(${x}px,${y}px)`;
       root.append(point);
       return point;

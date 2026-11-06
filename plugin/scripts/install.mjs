@@ -1,17 +1,17 @@
 // Copies the built plugin into a vault, and the published ink helper to where its installer puts it
 // (%LOCALAPPDATA%\Programs\Scribble), which is where the plugin looks for it first.
-// Usage: node install.mjs <vault path>
+// Usage: node scripts/install.mjs <vault path>  (from the plugin folder)
 import { cpSync, mkdirSync, existsSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 
 const vault = process.argv[2];
 if (!vault || !existsSync(join(vault, ".obsidian"))) {
-  console.error("Usage: node install.mjs <vault path>  (folder must contain .obsidian)");
+  console.error("Usage: node scripts/install.mjs <vault path>  (folder must contain .obsidian)");
   process.exit(1);
 }
 
-const here = dirname(fileURLToPath(import.meta.url));
+const here = join(dirname(fileURLToPath(import.meta.url)), ".."); // the plugin folder; this script is in plugin/scripts
 const helper = join(here, "..", "helper", "publish");
 if (!existsSync(join(helper, "InkOverlay.exe"))) {
   console.error("Helper not published yet. Run: dotnet publish ../helper -c Release -o ../helper/publish");

@@ -126,7 +126,7 @@ export class HandwritingIndex {
 
   async load() {
     try {
-      if (await this.app.vault.adapter.exists(this.file)) this.entries = JSON.parse(await this.app.vault.adapter.read(this.file));
+      if (await this.app.vault.adapter.exists(this.file)) this.entries = JSON.parse(await this.app.vault.adapter.read(this.file)) as Record<string, IndexEntry>;
     } catch (e) {
       console.warn("[scribble] handwriting index unreadable; rebuilding", e);
       this.entries = {};
@@ -216,7 +216,11 @@ export class HandwritingSearchModal extends SuggestModal<HandwritingMatch> {
     el.createEl("small", { text: where + at, cls: "oni-search-where" });
   }
 
-  async onChooseSuggestion(match: HandwritingMatch) {
+  onChooseSuggestion(match: HandwritingMatch) {
+    void this.openMatch(match);
+  }
+
+  private async openMatch(match: HandwritingMatch) {
     const file = this.app.vault.getFileByPath(match.doc);
     if (!file) return;
     if (/\.pdf$/i.test(match.doc) && match.line >= 0) {

@@ -289,8 +289,9 @@ function rewriteCalls(s: string, f: (name: string, arg: string) => string | null
 // ---------- equations ----------
 
 function solutionsOf(eq: string, v: string): string[] {
-  const res = nerdamer.solve(eq, v);
-  return (res.symbol?.elements ?? []).map((e: unknown) => String(e));
+  // Typed as a Vector, but at run time it's an expression wrapping one.
+  const res = nerdamer.solve(eq, v) as unknown as { symbol?: { elements?: unknown[] } };
+  return (res.symbol?.elements ?? []).map((e) => String(e));
 }
 
 const isReal = (s: string) => !/\bi\b/.test(s.replace(/\bpi\b/g, ""));

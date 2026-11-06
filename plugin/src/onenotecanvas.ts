@@ -65,7 +65,7 @@ export async function cardNode(app: App, canvasPath: string, title: string, card
   const name = card.kind === "image" ? `${canvasName(title)} ${number}${card.file.slice(card.file.lastIndexOf("."))}` : card.name ?? "attachment";
   const target = await app.fileManager.getAvailablePathForAttachment(name, canvasPath);
   const bytes = fs.readFileSync(card.file);
-  const saved = await app.vault.createBinary(target, bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer);
+  const saved = await app.vault.createBinary(target, bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
   // A picture is on the page; an attached file is only a link to it, as in OneNote.
   if (card.kind === "image") return { id, type: "file", file: saved.path, ...place };
   return { id, type: "text", text: `[[${saved.path}|${card.name ?? saved.name}]]`, ...place };

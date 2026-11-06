@@ -1,7 +1,7 @@
 /** The symbolic algebra library (nerdamer) and small helpers around it, shared by the engine and the steps. */
 
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-export const nerdamer: any = require("nerdamer-prime/all");
+// The all-in-one CommonJS build, which registers the Algebra, Calculus, Solve and Extra add-ons; typed by the package.
+export const nerdamer = require("nerdamer-prime/all") as typeof import("nerdamer-prime");
 
 /** Normal form of an expression (also what equality checks compare). */
 export const N = (s: string): string => nerdamer(s).toString();

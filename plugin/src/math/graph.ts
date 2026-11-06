@@ -268,7 +268,7 @@ export class GraphView {
         const color = style.getPropertyValue(PALETTE[i % PALETTE.length]).trim() || ["#3b82f6", "#ef4444", "#22c55e", "#f97316", "#a855f7"][i % 5];
         this.fns.push({ curve, f, color });
       } catch (e) {
-        this.spec.errors.push(`Can't graph "${curve.source}": ${e instanceof Error ? e.message : e}`);
+        this.spec.errors.push(`Can't graph "${curve.source}": ${e instanceof Error ? e.message : String(e)}`);
       }
     });
   }
@@ -343,7 +343,6 @@ export class GraphView {
     const pointers = new Map<number, { x: number; y: number }>();
     let pinch = 0;
     const c = this.canvas;
-    c.style.touchAction = "none";
     c.addEventListener("pointerdown", (e) => {
       c.setPointerCapture(e.pointerId);
       pointers.set(e.pointerId, { x: e.offsetX, y: e.offsetY });

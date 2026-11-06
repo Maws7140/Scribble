@@ -65,7 +65,7 @@ export class MathView extends ItemView {
       this.problem = parseProblem(linear, latex);
     } catch (e) {
       this.problem = null;
-      new Notice(`Couldn't read that as math: ${e instanceof Error ? e.message : e}`);
+      new Notice(`Couldn't read that as math: ${e instanceof Error ? e.message : String(e)}`);
     }
     this.source = source;
     const actions = this.problem ? actionsFor(this.problem) : [];
@@ -212,11 +212,13 @@ export class MathView extends ItemView {
     menu.showAtMouseEvent(e);
   }
 
-  private button(parent: HTMLElement, icon: string, label: string, onClick: () => void) {
+  private button(parent: HTMLElement, icon: string, label: string, onClick: () => void | Promise<unknown>) {
     const b = parent.createEl("button", { cls: "oni-math-button" });
     setIcon(b.createSpan({ cls: "oni-math-button-icon" }), icon);
     b.createSpan({ text: label });
-    b.addEventListener("click", onClick);
+    b.addEventListener("click", () => {
+      Promise.resolve(onClick()).catch((e) => console.error("[scribble] math:", e));
+    });
     return b;
   }
 
