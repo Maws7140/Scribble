@@ -25,6 +25,10 @@ public sealed class PageKind
     public string Kind { get; set; } = "note";    // note | canvas | empty
     public string Reason { get; set; } = "";
     public string? Error { get; set; }
+    // What reading the page will take: OneNote hands over each drawing's ink (one per stroke, often thousands)
+    // and each picture at about 17 ms apiece, so a page of handwriting can take a minute or more.
+    public int Strokes { get; set; }
+    public int Pictures { get; set; }
 }
 
 /// <summary>
@@ -113,7 +117,10 @@ public static class OneNoteVaultImport
         int printouts = pictures.Count(i => i.Attribute("isPrintOut")?.Value == "true");
         int files = root.Elements(one + "InsertedFile").Count() + root.Elements(one + "MediaFile").Count();
         int inside = outlines.Sum(o => o.Descendants(one + "Image").Count() + o.Descendants(one + "InsertedFile").Count());
-        PageKind Kind(string kind, string reason) => new() { Id = pageId, Kind = kind, Reason = reason };
+        PageKind Kind(string kind, string reason) => new()
+        {
+            Id = pageId, Kind = kind, Reason = reason, Strokes = drawings + inkWords, Pictures = pictures.Count + inside + files,
+        };
 
         if (texts.Count == 0 && inkWords == 0 && drawings == 0 && pictures.Count == 0 && files == 0 && inside == 0)
             return Kind("empty", "Nothing on the page");

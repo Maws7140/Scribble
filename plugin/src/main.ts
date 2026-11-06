@@ -626,6 +626,7 @@ export default class ScribblePlugin extends Plugin implements ToolbarHost, MathH
       if (proc !== this.helper) return;
       this.helper = null;
       this.domInk.releaseNative();
+      this.dropOneNoteWaits("the ink helper stopped while reading from OneNote");
       // Gone from under us (being updated, or uninstalled): start it again once it's back (see retryHelper).
       if ((e as NodeJS.ErrnoException).code === "ENOENT") this.helperProblem = "missing";
       else new Notice("Scribble: the ink helper failed: " + e.message);
@@ -635,6 +636,7 @@ export default class ScribblePlugin extends Plugin implements ToolbarHost, MathH
       if (proc !== this.helper) return;
       this.helper = null;
       this.domInk.releaseNative();
+      this.dropOneNoteWaits("the ink helper stopped while reading from OneNote");
       if (this.unloading || this.helperProblem) return;
       // The helper exits on purpose (code 75) when its pen input dies, e.g. after the Surface sleeps,
       // and may crash; either way bring up a fresh one. Give up if it's stuck in a crash loop.
@@ -669,6 +671,7 @@ export default class ScribblePlugin extends Plugin implements ToolbarHost, MathH
       const proc = this.helper;
       this.helper = null;
       proc?.kill();
+      this.dropOneNoteWaits("the ink helper needs updating");
       try { this.outdatedStamp = fs.statSync(this.helperPath).mtimeMs; } catch { this.outdatedStamp = 0; }
     }
     if (this.helperProblemShown.has(problem)) return;
@@ -726,6 +729,7 @@ export default class ScribblePlugin extends Plugin implements ToolbarHost, MathH
     this.helper = null;
     this.standby = null;
     this.domInk.releaseNative();
+    this.dropOneNoteWaits("the ink helper is being updated");
   }
 
   /** A replacement helper, starting up next to the running one. */
@@ -756,6 +760,8 @@ export default class ScribblePlugin extends Plugin implements ToolbarHost, MathH
     this.domInk.releaseNative();
     this.send({ type: "dom-refresh" });
     if (old) {
+      // Anything it was still reading from OneNote goes with it.
+      this.dropOneNoteWaits("the ink helper restarted while reading from OneNote");
       // It saves anything pending when its stdin closes; then the new one re-reads the file.
       old.once("exit", () => this.send({ type: "reload" }));
       old.stdin.end();
@@ -1286,17 +1292,34 @@ export default class ScribblePlugin extends Plugin implements ToolbarHost, MathH
   private classifyPages(ids: string[]): Promise<PageKind[]> {
     const unknown = (reason: string, error: string) => ids.map((id): PageKind => ({ id, kind: "note", reason, error }));
     if (!this.helper) return Promise.resolve(unknown("The ink helper isn't running", "no helper"));
+    // No time limit: these wait their turn behind any page being read, which can take minutes. The helper always
+    // answers; if it stops first, dropOneNoteWaits does.
     return new Promise((resolve) => {
-      const waiter = { ids: new Set(ids), resolve };
-      this.classifyWaiters.push(waiter);
+      this.classifyWaiters.push({ ids: new Set(ids), resolve });
       this.send({ type: "onenote-classify", pageIds: ids });
-      window.setTimeout(() => {
-        const i = this.classifyWaiters.indexOf(waiter);
-        if (i < 0) return;
-        this.classifyWaiters.splice(i, 1);
-        resolve(unknown("OneNote took too long to answer", "timeout"));
-      }, 120_000);
     });
+  }
+
+  /**
+   * The helper that was reading from OneNote stopped (restarted after sleep, updated, crashed): what it was asked
+   * won't come back, so don't wait for it. Pages being imported fail and can be imported again.
+   */
+  private dropOneNoteWaits(why: string) {
+    if (this.treeNotice) {
+      this.treeNotice.hide();
+      this.treeNotice = null;
+      new Notice(`Couldn't get your OneNote notebooks: ${why}`);
+    }
+    for (const w of this.classifyWaiters) w.resolve([...w.ids].map((id): PageKind => ({ id, kind: "note", reason: "Couldn't look at it", error: why })));
+    this.classifyWaiters = [];
+    for (const done of this.noteReads.values()) done({ ok: false, error: why });
+    this.noteReads.clear();
+    for (const job of this.imports.values()) {
+      fs.rmSync(job.inkPath, { force: true });
+      fs.rmSync(this.canvasStatePath(job.syncId), { force: true });
+      job.reject(new Error(why));
+    }
+    this.imports.clear();
   }
 
   private onClassified(results: PageKind[]) {
@@ -1325,12 +1348,10 @@ export default class ScribblePlugin extends Plugin implements ToolbarHost, MathH
   /** Read a page into a new note, linked to the page for sync. Its ink, if any, is placed when the note is first open. */
   private async importNotePage(page: PlannedPage): Promise<string> {
     const id = ++this.importId;
-    const msg = await new Promise<NoteReadMessage>((resolve, reject) => {
+    // No time limit, as for a canvas: a page of handwriting takes OneNote minutes to hand over.
+    const msg = await new Promise<NoteReadMessage>((resolve) => {
       this.noteReads.set(id, resolve);
       this.send({ type: "onenote-read-note", import: { id, pageId: page.id } });
-      window.setTimeout(() => {
-        if (this.noteReads.delete(id)) reject(new Error("OneNote took too long to answer"));
-      }, 300_000);
     });
     try {
       if (!msg.ok) throw new Error(msg.error ?? "unknown error");

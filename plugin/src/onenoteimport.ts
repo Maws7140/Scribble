@@ -20,6 +20,9 @@ export interface PageKind {
   kind: "note" | "canvas" | "empty";
   reason: string;
   error?: string;
+  /** Ink strokes and pictures or files: what reading the page takes time over. */
+  strokes?: number;
+  pictures?: number;
 }
 
 /** A page read for a note: its parts top to bottom, and how much ink it has. */
@@ -145,6 +148,36 @@ export async function writeImportedNote(app: App, notePath: string, page: NoteRe
 const BATCH = 20;
 
 /**
+ * How long OneNote takes to hand over a page: about 17 ms a stroke or picture on a Surface Pro (it's OneNote's
+ * time, not ours), so 5,000 strokes of handwriting is a minute and a half. Learned from each page imported.
+ */
+let msPerItem = 18;
+const PAGE_MS = 1000;
+
+function estimate(k: PageKind | undefined): number | null {
+  return k ? PAGE_MS + msPerItem * ((k.strokes ?? 0) + (k.pictures ?? 0)) : null;
+}
+
+function learn(k: PageKind | undefined, ms: number) {
+  const items = (k?.strokes ?? 0) + (k?.pictures ?? 0);
+  if (items < 200) return; // too little to tell
+  msPerItem = (msPerItem + Math.max(1, (ms - PAGE_MS) / items)) / 2;
+}
+
+/** 0:42, 12:05, 1:02:05 */
+function clock(ms: number) {
+  const s = Math.round(ms / 1000);
+  const mm = Math.floor(s / 60) % 60, ss = String(s % 60).padStart(2, "0");
+  return s >= 3600 ? `${Math.floor(s / 3600)}:${String(mm).padStart(2, "0")}:${ss}` : `${mm}:${ss}`;
+}
+
+/** "about 3 min", "about 1 h 20 min" */
+function roughly(ms: number) {
+  const min = Math.max(1, Math.round(ms / 60_000));
+  return min < 60 ? `about ${min} min` : `about ${Math.floor(min / 60)} h${min % 60 ? ` ${min % 60} min` : ""}`;
+}
+
+/**
  * "Import from OneNote": choose notebooks, sections or single pages, and whether each becomes a note or a canvas.
  * Each page gets a suggestion from what's on it (one column of text: a note; a layout across the page: a canvas),
  * which can be changed page by page or for all at once.
@@ -164,6 +197,7 @@ export class OneNoteImportModal extends Modal {
   private statusEl!: HTMLElement;
   private summaryEl!: HTMLElement;
   private importButton!: HTMLButtonElement;
+  private ticker: number | null = null;
 
   constructor(app: App, private host: ImportHost, notebooks: OneNoteNode[], folder: string) {
     super(app);
@@ -228,6 +262,7 @@ export class OneNoteImportModal extends Modal {
   onClose() {
     this.closed = true;
     this.stopped = true;
+    this.stopTicker();
     this.contentEl.empty();
   }
 
@@ -360,7 +395,12 @@ export class OneNoteImportModal extends Modal {
     if (!row.reasonEl || !row.el) return;
     const k = row.kind;
     const suggested = k ? (k.kind === "canvas" ? "canvas" : "note") : null;
-    row.reasonEl.setText(!k ? "" : k.kind === "empty" ? "Empty page" : row.chosen && row.as !== suggested ? `${k.reason} (suggested: ${suggested})` : k.reason);
+    let text = !k ? "" : k.kind === "empty" ? "Empty page" : row.chosen && row.as !== suggested ? `${k.reason} (suggested: ${suggested})` : k.reason;
+    // A page of handwriting takes a while to read: say so before it's chosen.
+    const ms = estimate(k);
+    if (k && k.kind !== "empty" && (k.strokes ?? 0) >= 100) text += `; ${(k.strokes ?? 0).toLocaleString()} strokes`;
+    if (ms != null && ms >= 30_000) text += `, ${roughly(ms)} to read`;
+    row.reasonEl.setText(text);
     row.reasonEl.toggleClass("mod-warning", !!k?.error);
     const icon = row.el.querySelector(".oni-import-icon");
     if (icon?.instanceOf(HTMLElement)) setIcon(icon, row.as === "canvas" ? "layout-dashboard" : "file-text");
@@ -430,8 +470,16 @@ export class OneNoteImportModal extends Modal {
     const chosen = this.selected();
     const canvases = chosen.filter((p) => p.as === "canvas").length;
     const notes = chosen.length - canvases;
-    this.summaryEl.setText(chosen.length === 0 ? "Select the notebooks, sections or pages to import."
-      : `${chosen.length} page${chosen.length === 1 ? "" : "s"}: ${notes} note${notes === 1 ? "" : "s"}, ${canvases} canvas${canvases === 1 ? "" : "es"}`);
+    let text = chosen.length === 0 ? "Select the notebooks, sections or pages to import."
+      : `${chosen.length} page${chosen.length === 1 ? "" : "s"}: ${notes} note${notes === 1 ? "" : "s"}, ${canvases} canvas${canvases === 1 ? "" : "es"}`;
+    if (chosen.length > 0) {
+      const known = chosen.map((p) => estimate(p.kind));
+      const ms = known.reduce<number>((sum, m) => sum + (m ?? 0), 0);
+      const unknown = known.filter((m) => m == null).length;
+      if (ms >= 60_000) text += `. ${unknown ? "At least " + roughly(ms).replace("about ", "") : roughly(ms).replace(/^a/, "A")} to import`;
+      else if (unknown) text += ". Working out how long it will take...";
+    }
+    this.summaryEl.setText(text);
     this.importButton.disabled = chosen.length === 0;
   }
 
@@ -449,22 +497,50 @@ export class OneNoteImportModal extends Modal {
     this.stopped = false;
     this.importButton.setText("Stop");
     this.importButton.removeClass("mod-cta");
-    this.importButton.onclick = () => { this.stopped = true; };
+    this.importButton.onclick = () => {
+      // The page being read can't be cut short: OneNote is busy handing it over.
+      this.stopped = true;
+      this.importButton.setText("Stopping after this page");
+      this.importButton.disabled = true;
+    };
     const done: { row: Row; path: string }[] = [];
     const failed: { row: Row; error: string }[] = [];
-    for (let i = 0; i < chosen.length && !this.stopped; i++) {
-      const row = chosen[i];
-      this.summaryEl.setText(`Importing ${i + 1} of ${chosen.length}: ${row.node.name || "Untitled"}`);
-      try {
-        // A page not looked at yet, left as suggested: look now, so it becomes what suits it.
-        if (!row.kind && !row.chosen) this.apply(await this.host.classify([row.node.id]));
-        const path = await this.host.importPage({ id: row.node.id, title: row.node.name, folder: this.folderFor(row), as: row.as });
-        done.push({ row, path });
-        row.imported = path;
-        row.selected = false;
-      } catch (e) {
-        failed.push({ row, error: e instanceof Error ? e.message : String(e) });
+    // A clock that ticks, so a page that takes minutes doesn't look stuck.
+    let at = 0;
+    let started = Date.now();
+    const show = () => {
+      const row = chosen[at];
+      const took = Date.now() - started;
+      const ms = estimate(row.kind);
+      let text = `Importing ${at + 1} of ${chosen.length}: ${row.node.name || "Untitled"}. ${clock(took)}`;
+      if (ms != null && ms >= 10_000) text += ` of ${roughly(Math.max(ms, took))}`;
+      const after = chosen.slice(at + 1).reduce((sum, p) => sum + (estimate(p.kind) ?? PAGE_MS), 0);
+      const left = Math.max(0, (ms ?? 0) - took) + after;
+      if (at + 1 < chosen.length && left >= 60_000) text += `; ${roughly(left)} left in all`;
+      this.summaryEl.setText(text);
+    };
+    this.ticker = window.setInterval(show, 1000);
+    try {
+      for (; at < chosen.length && !this.stopped; at++) {
+        const row = chosen[at];
+        started = Date.now();
+        show();
+        try {
+          // A page not looked at yet, left as suggested: look now, so it becomes what suits it.
+          if (!row.kind && !row.chosen) this.apply(await this.host.classify([row.node.id]));
+          show();
+          const begun = Date.now();
+          const path = await this.host.importPage({ id: row.node.id, title: row.node.name, folder: this.folderFor(row), as: row.as });
+          learn(row.kind, Date.now() - begun);
+          done.push({ row, path });
+          row.imported = path;
+          row.selected = false;
+        } catch (e) {
+          failed.push({ row, error: e instanceof Error ? e.message : String(e) });
+        }
       }
+    } finally {
+      this.stopTicker();
     }
     this.importing = false;
     if (this.closed) {
@@ -472,6 +548,11 @@ export class OneNoteImportModal extends Modal {
       return;
     }
     this.showResult(done, failed, chosen.length);
+  }
+
+  private stopTicker() {
+    if (this.ticker != null) window.clearInterval(this.ticker);
+    this.ticker = null;
   }
 
   private showResult(done: { row: Row; path: string }[], failed: { row: Row; error: string }[], wanted: number) {
