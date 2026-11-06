@@ -204,6 +204,51 @@ public sealed partial class OverlayWindow
         SendExtent();
     }
 
+    /// <summary>"Import from OneNote": every notebook, section and page to choose from.</summary>
+    void OneNoteTree()
+    {
+        void Failed(string error) => Protocol.Send(new { type = "onenote-tree", ok = false, error });
+        RunOneNote(() =>
+        {
+            try { Protocol.Send(new { type = "onenote-tree", ok = true, notebooks = OneNoteVaultImport.Tree(OneNote.Connect()) }); }
+            catch (Exception e) when (!Unreachable(e)) { Protocol.Log("OneNote tree: " + e); Failed(e.Message); }
+        }, null, unreachable: () => Failed("OneNote isn't responding right now (it may be starting, updating or closed)."));
+    }
+
+    /// <summary>Note or canvas, for each page: the plugin asks a few at a time while its import dialog is open.</summary>
+    void ClassifyOneNotePages(string[]? ids)
+    {
+        if (ids == null || ids.Length == 0) return;
+        RunOneNote(() =>
+        {
+            var app = OneNote.Connect();
+            var results = new List<PageKind>();
+            foreach (var id in ids)
+            {
+                try { results.Add(OneNoteVaultImport.Classify(app, id)); }
+                catch (Exception e) when (!Unreachable(e)) { results.Add(new PageKind { Id = id, Kind = "note", Reason = "Couldn't read the page", Error = e.Message }); }
+            }
+            Protocol.Send(new { type = "onenote-classified", results });
+        }, null, unreachable: () => Protocol.Send(new { type = "onenote-classified", results = ids.Select(id => new PageKind { Id = id, Kind = "note", Reason = "OneNote isn't responding", Error = "unreachable" }) }));
+    }
+
+    /// <summary>Read a page for a note: its text, pictures and files top to bottom (see OneNoteVaultImport.ReadForNote).</summary>
+    void ReadOneNotePageForNote(ImportRequest? req)
+    {
+        if (req == null) return;
+        void Failed(string error) => Protocol.Send(new { type = "onenote-note-read", ok = false, id = req.Id, error });
+        RunOneNote(() =>
+        {
+            try
+            {
+                var r = OneNoteVaultImport.ReadForNote(OneNote.Connect(), req.PageId);
+                Protocol.Log($"OneNote: read a page for a note: {r.Cards.Count} parts, {r.InkStrokes} strokes");
+                Protocol.Send(new { type = "onenote-note-read", ok = true, id = req.Id, title = r.Title, cards = r.Cards, inkStrokes = r.InkStrokes, inkSig = r.InkSig, lastModified = r.LastModified, tempDir = r.TempDir });
+            }
+            catch (Exception e) when (!Unreachable(e)) { Protocol.Log("OneNote note import: " + e); Failed(e.Message); }
+        }, null, unreachable: () => Failed("OneNote isn't responding right now (it may be starting, updating or closed)."));
+    }
+
     /// <summary>The pages to choose from, for opening one as a canvas.</summary>
     void ListOneNotePages()
     {

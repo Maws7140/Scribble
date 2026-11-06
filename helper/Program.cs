@@ -83,6 +83,8 @@ public sealed class Command
     public ImportRequest? Import { get; set; }
     // "onenote-poll": background sync's check for OneNote edits; "onenote-open": just show a page.
     public PollRequest? Poll { get; set; }
+    // "onenote-classify": note or canvas, for each of these pages (see OneNoteVaultImport).
+    public string[]? PageIds { get; set; }
     public string? PageId { get; set; }
 
     // Handwriting and selection actions (see Writing.cs).

@@ -12,6 +12,7 @@ Write on any note, canvas, PDF or picture. Each note can get its own OneNote pag
 - Ink to Text, Ink to Math (solve, steps, graphs, practice quizzes), handwriting search
 - Ruled lines and grids on notes and canvases
 - Background two-way sync with OneNote (text, ink and equations)
+- Import from OneNote: pick notebooks, sections or single pages; each becomes a note or a canvas, whichever suits what's on it (you can change any)
 - Choose which folders, tags or notes get the ink tools
 - Obsidian's **Export to PDF** includes the note's ink, with text and handwriting scaled together to fit the paper
 

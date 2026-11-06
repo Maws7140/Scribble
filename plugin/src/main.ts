@@ -18,6 +18,7 @@ import { InkPanes, DomUpdate, NativeInk } from "./domink";
 import { lineShifts } from "./lineshift";
 import { MergedHistory, PageHistory } from "./undo";
 import { ImportCard, OneNotePage, PagePicker, freeCanvasPath, writeCanvas } from "./onenotecanvas";
+import { ImportHost, NoteRead, NoteReadMessage, OneNoteImportModal, OneNoteNode, PageKind, PlannedPage, ensureFolder, freePath, safeName, writeImportedNote } from "./onenoteimport";
 import { CardChange, applyCardChanges, canvasNodes } from "./canvassync";
 import { CanvasTouch, TouchCanvas } from "./canvastouch";
 import { ruleCanvas } from "./canvaslines";
@@ -133,6 +134,7 @@ export default class ScribblePlugin extends Plugin implements ToolbarHost, MathH
     } });
     this.addCommand({ id: "undo-ink", name: "Undo ink", callback: () => this.command("undo") });
     this.addCommand({ id: "open-onenote-page-as-canvas", name: "Open a OneNote page as a canvas", callback: () => this.pickOneNotePage() });
+    this.addCommand({ id: "import-from-onenote", name: "Import from OneNote", callback: () => this.openImporter() });
     this.addCommand({
       id: "select-all-ink",
       name: "Select all ink on this page",
@@ -783,6 +785,7 @@ export default class ScribblePlugin extends Plugin implements ToolbarHost, MathH
       count?: number; id?: number; inkPath?: string; purpose?: string; lines?: RecognizedLine[];
       line?: number; lineEnd?: number; latex?: string; linear?: string;
       edited?: boolean; retry?: boolean; quiet?: boolean; visible?: boolean; kind?: string; x?: number; y?: number; w?: number; h?: number; tipX?: number; tipY?: number; playing?: boolean;
+      notebooks?: OneNoteNode[]; results?: PageKind[]; title?: string; cards?: NoteRead["cards"]; inkStrokes?: number; inkSig?: string; tempDir?: string; lastModified?: string;
     };
     try {
       msg = JSON.parse(line) as typeof msg;
@@ -830,6 +833,20 @@ export default class ScribblePlugin extends Plugin implements ToolbarHost, MathH
       case "onenote-result":
         this.onSent(msg);
         break;
+      case "onenote-tree":
+        this.onOneNoteTree(msg);
+        break;
+      case "onenote-classified":
+        this.onClassified(msg.results ?? []);
+        break;
+      case "onenote-note-read": {
+        const done = this.noteReads.get(msg.id ?? -1);
+        if (done) {
+          this.noteReads.delete(msg.id ?? -1);
+          done(msg);
+        }
+        break;
+      }
       case "onenote-pulled":
         if (msg.noteKey) this.onPulled(msg.noteKey, msg.changes ?? [], !!msg.inkChanged, msg.strokes ?? 0, msg.inkWords ?? 0, msg.state);
         break;
@@ -1150,7 +1167,10 @@ export default class ScribblePlugin extends Plugin implements ToolbarHost, MathH
   // ---------- OneNote pages as canvases ----------
 
   private pagesNotice: Notice | null = null;
-  private imports = new Map<number, { pageId: string; canvasPath: string; inkPath: string; syncId: string; notice: Notice }>();
+  private imports = new Map<number, {
+    pageId: string; canvasPath: string; inkPath: string; syncId: string;
+    resolve: (r: { file: TFile; cards: number; strokes: number }) => void; reject: (e: Error) => void;
+  }>();
   private importId = 0;
 
   /** Pages keep their shape on a canvas, where a note's single column can't hold them. Only reads OneNote. */
@@ -1171,8 +1191,6 @@ export default class ScribblePlugin extends Plugin implements ToolbarHost, MathH
   }
 
   private async openOneNotePage(page: OneNotePage) {
-    const base = this.vaultPath();
-    if (!base) return;
     // Opened before: that canvas, not a second copy.
     const opened = this.app.vault.getFileByPath(this.settings.oneNoteCanvases[page.id] ?? "");
     if (opened) {
@@ -1181,22 +1199,38 @@ export default class ScribblePlugin extends Plugin implements ToolbarHost, MathH
       return;
     }
     const folder = this.app.fileManager.getNewFileParent(this.app.workspace.getActiveFile()?.path ?? "");
-    const canvasPath = freeCanvasPath(this.app, folder.path, page.title);
+    const notice = new Notice(`Reading "${page.title || "Untitled page"}" from OneNote. A page with a lot of ink can take a minute or two.`, 0);
+    try {
+      const { file, cards, strokes } = await this.importCanvasPage(page.id, page.title, folder.path);
+      notice.hide();
+      await this.app.workspace.getLeaf("tab").openFile(file);
+      const hidden = this.ignoreFor(file).toolbar ? " Its folder isn't one your ink settings cover, so it has no ink tools there." : "";
+      const synced = this.autoSync() ? "Changes on either side now sync." : "Send or pull changes from the toolbar.";
+      new Notice(`Opened as ${file.path}: ${cards} cards, ${strokes} strokes. ${synced}${hidden}`, 8000);
+    } catch (e) {
+      notice.hide();
+      new Notice(`Couldn't open the page as a canvas: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  /** Read a page into a new canvas in this folder, linked to the page for sync. */
+  private importCanvasPage(pageId: string, title: string, folder: string): Promise<{ file: TFile; cards: number; strokes: number }> {
+    const base = this.vaultPath();
+    if (!base) return Promise.reject(new Error("the vault isn't a folder on this computer"));
+    const canvasPath = freeCanvasPath(this.app, folder, title);
     const inkPath = path.join(base, inkFileFor(canvasPath, "canvas"));
     const id = ++this.importId;
     const syncId = this.newCanvasSyncId();
-    this.imports.set(id, {
-      pageId: page.id, canvasPath, inkPath, syncId,
-      notice: new Notice(`Reading "${page.title || "Untitled page"}" from OneNote. A page with a lot of ink can take a minute or two.`, 0),
+    return new Promise((resolve, reject) => {
+      this.imports.set(id, { pageId, canvasPath, inkPath, syncId, resolve, reject });
+      this.send({ type: "onenote-import", import: { id, pageId, inkPath, origin: CANVAS_ORIGIN, statePath: this.canvasStatePath(syncId) } });
     });
-    this.send({ type: "onenote-import", import: { id, pageId: page.id, inkPath, origin: CANVAS_ORIGIN, statePath: this.canvasStatePath(syncId) } });
   }
 
   private async onOneNotePageRead(msg: { ok?: boolean; id?: number; error?: string; title?: string; cards?: ImportCard[]; strokes?: number; tempDir?: string; lastModified?: string }) {
     const job = this.imports.get(msg.id ?? -1);
     if (!job) return;
-    this.imports.delete(msg.id!);
-    job.notice.hide();
+    this.imports.delete(msg.id ?? -1);
     try {
       if (!msg.ok) throw new Error(msg.error ?? "unknown error");
       const file = await writeCanvas(this.app, job.canvasPath, msg.title ?? "", msg.cards ?? []);
@@ -1204,20 +1238,145 @@ export default class ScribblePlugin extends Plugin implements ToolbarHost, MathH
       this.settings.oneNoteCanvasSync[file.path] = { id: job.syncId, pageId: job.pageId, lastModified: msg.lastModified ?? "" };
       this.quietUntil.set(file.path, Date.now() + 5000);
       this.persist();
-      await this.app.workspace.getLeaf("tab").openFile(file);
-      const hidden = this.ignoreFor(file).toolbar ? " Its folder isn't one your ink settings cover, so it has no ink tools there." : "";
-      const synced = this.autoSync() ? "Changes on either side now sync." : "Send or pull changes from the toolbar.";
-      new Notice(`Opened as ${file.path}: ${msg.cards?.length ?? 0} cards, ${msg.strokes ?? 0} strokes. ${synced}${hidden}`, 8000);
+      job.resolve({ file, cards: msg.cards?.length ?? 0, strokes: msg.strokes ?? 0 });
     } catch (e) {
       // No canvas came of it, so none of its ink either.
       fs.rmSync(job.inkPath, { force: true });
       fs.rmSync(this.canvasStatePath(job.syncId), { force: true });
-      new Notice(`Couldn't open the page as a canvas: ${e instanceof Error ? e.message : String(e)}`);
+      job.reject(e instanceof Error ? e : new Error(String(e)));
     } finally {
       try {
         if (msg.tempDir) fs.rmSync(msg.tempDir, { recursive: true, force: true });
       } catch { /* only a temporary copy: the canvas is fine, and Windows clears it in time */ }
     }
+  }
+
+  // ---------- Import from OneNote ----------
+
+  private treeNotice: Notice | null = null;
+  private classifyWaiters: { ids: Set<string>; resolve: (results: PageKind[]) => void }[] = [];
+  private noteReads = new Map<number, (msg: NoteReadMessage) => void>();
+
+  /** "Import from OneNote": get the notebooks, then let the dialog take it from there. */
+  private openImporter() {
+    if (!this.helper) {
+      new Notice("Scribble: the ink helper isn't running, and it's what reads from OneNote.");
+      return;
+    }
+    this.treeNotice?.hide();
+    this.treeNotice = new Notice("Getting your OneNote notebooks...", 0);
+    this.send({ type: "onenote-tree" });
+  }
+
+  private onOneNoteTree(msg: { ok?: boolean; error?: string; notebooks?: OneNoteNode[] }) {
+    this.treeNotice?.hide();
+    this.treeNotice = null;
+    if (!msg.ok) {
+      new Notice(`Couldn't get your OneNote notebooks: ${msg.error ?? "unknown error"}`);
+      return;
+    }
+    const host: ImportHost = {
+      classify: (ids) => this.classifyPages(ids),
+      importedAs: (pageId) => this.importedPath(pageId),
+      importPage: (page) => this.importPage(page),
+    };
+    new OneNoteImportModal(this.app, host, msg.notebooks ?? [], "OneNote").open();
+  }
+
+  private classifyPages(ids: string[]): Promise<PageKind[]> {
+    const unknown = (reason: string, error: string) => ids.map((id): PageKind => ({ id, kind: "note", reason, error }));
+    if (!this.helper) return Promise.resolve(unknown("The ink helper isn't running", "no helper"));
+    return new Promise((resolve) => {
+      const waiter = { ids: new Set(ids), resolve };
+      this.classifyWaiters.push(waiter);
+      this.send({ type: "onenote-classify", pageIds: ids });
+      window.setTimeout(() => {
+        const i = this.classifyWaiters.indexOf(waiter);
+        if (i < 0) return;
+        this.classifyWaiters.splice(i, 1);
+        resolve(unknown("OneNote took too long to answer", "timeout"));
+      }, 120_000);
+    });
+  }
+
+  private onClassified(results: PageKind[]) {
+    const i = this.classifyWaiters.findIndex((w) => results.some((r) => w.ids.has(r.id)));
+    if (i < 0) return;
+    const [waiter] = this.classifyWaiters.splice(i, 1);
+    waiter.resolve(results);
+  }
+
+  /** The note or canvas a page was imported (or sent) as, if it's still in the vault. */
+  private importedPath(pageId: string): string | null {
+    const canvas = this.settings.oneNoteCanvases[pageId];
+    if (canvas && this.app.vault.getFileByPath(canvas)) return canvas;
+    for (const [notePath, state] of Object.entries(this.settings.oneNotePages)) {
+      if (typeof state === "object" && state.pageId === pageId && this.app.vault.getFileByPath(notePath)) return notePath;
+    }
+    return null;
+  }
+
+  private async importPage(page: PlannedPage): Promise<string> {
+    await ensureFolder(this.app, page.folder);
+    if (page.as === "canvas") return (await this.importCanvasPage(page.id, page.title, page.folder)).file.path;
+    return this.importNotePage(page);
+  }
+
+  /** Read a page into a new note, linked to the page for sync. Its ink, if any, is placed when the note is first open. */
+  private async importNotePage(page: PlannedPage): Promise<string> {
+    const id = ++this.importId;
+    const msg = await new Promise<NoteReadMessage>((resolve, reject) => {
+      this.noteReads.set(id, resolve);
+      this.send({ type: "onenote-read-note", import: { id, pageId: page.id } });
+      window.setTimeout(() => {
+        if (this.noteReads.delete(id)) reject(new Error("OneNote took too long to answer"));
+      }, 300_000);
+    });
+    try {
+      if (!msg.ok) throw new Error(msg.error ?? "unknown error");
+      const read: NoteRead = { title: msg.title ?? page.title, cards: msg.cards ?? [], inkStrokes: msg.inkStrokes ?? 0, inkSig: msg.inkSig ?? "", lastModified: msg.lastModified ?? "" };
+      const notePath = freePath(this.app, page.folder, safeName(read.title || page.title, "OneNote page"), "md");
+      const { file, blocks } = await writeImportedNote(this.app, notePath, read);
+      this.settings.oneNotePages[file.path] = {
+        pageId: page.id, originX: 0, originY: 0,
+        // With ink, the first pull (once the note is laid out) brings it in: it's "changed" from nothing.
+        inkSig: read.inkStrokes > 0 ? "" : read.inkSig,
+        lastModified: read.lastModified, blocks,
+      };
+      if (read.inkStrokes > 0) this.settings.oneNoteInkPending = [...this.settings.oneNoteInkPending.filter((p) => p !== file.path), file.path];
+      this.quietUntil.set(file.path, Date.now() + 5000);
+      this.persist();
+      return file.path;
+    } finally {
+      try {
+        if (msg.tempDir) fs.rmSync(msg.tempDir, { recursive: true, force: true });
+      } catch { /* only a temporary copy */ }
+    }
+  }
+
+  /**
+   * A note imported with ink: where the ink goes depends on the note's text column, which is only known once it's
+   * open and laid out. Then the page's ink comes in as an ordinary pull.
+   */
+  private placePendingInk(notePath: string) {
+    if (!this.settings.oneNoteInkPending.includes(notePath)) return;
+    window.setTimeout(() => {
+      const view = this.activeNote();
+      const state = this.syncState(notePath);
+      if (!view?.file || view.file.path !== notePath || !state || !this.helper) return;
+      const sizer = view.getMode() === "preview"
+        ? view.contentEl.querySelector(".markdown-preview-sizer")
+        : view.contentEl.querySelector(".cm-sizer");
+      if (!sizer?.instanceOf(HTMLElement)) return;
+      const layout = lineTops(view, sizer, false);
+      if (!layout) return;
+      state.originX = textColumn(view, sizer).left;
+      state.originY = layout.tops[0] ?? 0;
+      state.inkSig = "";
+      this.settings.oneNoteInkPending = this.settings.oneNoteInkPending.filter((p) => p !== notePath);
+      this.persist();
+      this.pullFromOneNote(notePath, "auto");
+    }, 1500);
   }
 
   // ---------- ink files follow their notes ----------
@@ -1255,6 +1414,10 @@ export default class ScribblePlugin extends Plugin implements ToolbarHost, MathH
         this.settings.oneNoteCanvases[pageId] = file.path;
         this.persist();
       }
+    }
+    if (this.settings.oneNoteInkPending.includes(oldPath)) {
+      this.settings.oneNoteInkPending = this.settings.oneNoteInkPending.map((p) => (p === oldPath ? file.path : p));
+      this.persist();
     }
     const page = this.settings.oneNotePages[oldPath];
     if (page && !this.settings.oneNotePages[file.path]) {
@@ -1611,6 +1774,7 @@ export default class ScribblePlugin extends Plugin implements ToolbarHost, MathH
 
   private onNoteOpened() {
     const path = this.activeNote()?.file?.path;
+    if (path) this.placePendingInk(path);
     if (!path || !this.autoSync()) return;
     if (this.settings.oneNoteScope === "opened" && !this.settings.oneNotePages[path]) this.pendingPush.add(path);
     // Give the note a moment to lay out before measuring it.

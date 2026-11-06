@@ -244,6 +244,15 @@ public sealed partial class OverlayWindow : Window
             case "onenote-import":
                 ImportOneNotePage(cmd.Import);
                 break;
+            case "onenote-tree":
+                OneNoteTree();
+                break;
+            case "onenote-classify":
+                ClassifyOneNotePages(cmd.PageIds);
+                break;
+            case "onenote-read-note":
+                ReadOneNotePageForNote(cmd.Import);
+                break;
             case "onenote-open":
                 OpenInOneNote(cmd.PageId);
                 break;

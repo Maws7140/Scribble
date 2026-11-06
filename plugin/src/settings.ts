@@ -103,6 +103,8 @@ export interface InkSettings {
    * the page's fingerprint then, for the cheap "did OneNote change it?" check.
    */
   oneNoteCanvasSync: Record<string, { id: string; pageId: string; lastModified: string }>;
+  /** Notes imported from OneNote whose ink is still to be placed: that waits until the note is open and laid out. */
+  oneNoteInkPending: string[];
   /** Math Assistant: angle unit for trig, and whether to show complex solutions. */
   mathAngle: "rad" | "deg" | "grad";
   /** Draw ink with the GPU (smoother on some machines, ~100 MB more memory); off: software rendering. */
@@ -175,6 +177,7 @@ export const DEFAULT_SETTINGS: InkSettings = {
   oneNotePages: {},
   oneNoteCanvases: {},
   oneNoteCanvasSync: {},
+  oneNoteInkPending: [],
   mathAngle: "rad",
   gpuRendering: false,
   mathNumbers: "real",
