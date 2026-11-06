@@ -121,7 +121,7 @@ export class InkPrint {
   private parts(root: HTMLElement, text: string, lineHeight: number): PrintPart[] {
     // The print context has no source ranges. Reuse Reading view's parser, including plugin blocks.
     const parser = MarkdownPreviewRenderer.prototype as unknown as { parseSync?: (this: unknown) => void };
-    if (!parser.parseSync) throw new Error("Onesidian: this Obsidian version cannot map ink to PDF blocks.");
+    if (!parser.parseSync) throw new Error("Scribble: this Obsidian version cannot map ink to PDF blocks.");
     let parsed: ParsedSection[] = [];
     parser.parseSync.call({ text, parseFrontmatter: true,
       parseFinish: (_text: string, result: { sections: ParsedSection[] }) => { parsed = result.sections; } });
@@ -147,7 +147,7 @@ export class InkPrint {
       const count = parsedBlocks.children.length;
       if (!count) continue;
       const children = blocks.slice(at, at + count);
-      if (children.length !== count) throw new Error("Onesidian: PDF blocks changed while adding ink. Export cancelled.");
+      if (children.length !== count) throw new Error("Scribble: PDF blocks changed while adding ink. Export cancelled.");
       at += count;
       const start = section.pos.start.line;
       const end = section.pos.end.line;
@@ -169,7 +169,7 @@ export class InkPrint {
       }
       result.push({ el, start, end });
     }
-    if (at !== blocks.length) throw new Error("Onesidian: could not match every PDF block to its ink. Export cancelled.");
+    if (at !== blocks.length) throw new Error("Scribble: could not match every PDF block to its ink. Export cancelled.");
     blanks(previous + 1, lines.length - 1, null);
     return result;
   }

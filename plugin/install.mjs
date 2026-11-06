@@ -1,5 +1,5 @@
 // Copies the built plugin into a vault, and the published ink helper to where its installer puts it
-// (%LOCALAPPDATA%\Programs\Onesidian), which is where the plugin looks for it first.
+// (%LOCALAPPDATA%\Programs\Scribble), which is where the plugin looks for it first.
 // Usage: node install.mjs <vault path>
 import { cpSync, mkdirSync, existsSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "fs";
 import { join, dirname } from "path";
@@ -18,28 +18,29 @@ if (!existsSync(join(helper, "InkOverlay.exe"))) {
   process.exit(1);
 }
 
-const dest = join(vault, ".obsidian", "plugins", "onesidian");
+const dest = join(vault, ".obsidian", "plugins", "scribble");
 mkdirSync(dest, { recursive: true });
 for (const f of ["main.js", "manifest.json", "styles.css"]) cpSync(join(here, f), join(dest, f));
-// Before it was Onesidian the plugin was "onenote-ink": bring its settings and handwriting index across, switch
-// it on under the new id, and park the old folder outside plugins/ (kept, not deleted).
-const oldDir = join(vault, ".obsidian", "plugins", "onenote-ink");
-if (existsSync(oldDir)) {
+// The plugin was called "onenote-ink", then "onesidian". Bring an old id's settings and handwriting index across,
+// switch it on under the new id, and park the old folder outside plugins/ (kept, not deleted).
+for (const oldId of ["onesidian", "onenote-ink"]) {
+  const oldDir = join(vault, ".obsidian", "plugins", oldId);
+  if (!existsSync(oldDir)) continue;
   for (const f of ["data.json", "handwriting-index.json"]) {
     if (existsSync(join(oldDir, f)) && !existsSync(join(dest, f))) cpSync(join(oldDir, f), join(dest, f));
   }
   const enabled = join(vault, ".obsidian", "community-plugins.json");
   if (existsSync(enabled)) {
     const ids = JSON.parse(readFileSync(enabled, "utf8"));
-    writeFileSync(enabled, JSON.stringify([...new Set(ids.map((id) => (id === "onenote-ink" ? "onesidian" : id)))], null, 2));
+    writeFileSync(enabled, JSON.stringify([...new Set(ids.map((id) => (id === oldId ? "scribble" : id)))], null, 2));
   }
-  const parked = join(vault, ".obsidian", "onenote-ink-old-plugin");
+  const parked = join(vault, ".obsidian", oldId + "-old-plugin");
   if (!existsSync(parked)) renameSync(oldDir, parked);
-  console.log("Moved the old onenote-ink plugin's settings to onesidian; the old folder is in " + parked);
+  console.log(`Moved the old ${oldId} plugin's settings to scribble; the old folder is in ${parked}`);
 }
 // A running helper locks its files, but Windows lets us rename them. Move the old build aside
 // (the running process keeps using it) and clean up leftovers from earlier installs when unlocked.
-const helperDest = process.env.LOCALAPPDATA ? join(process.env.LOCALAPPDATA, "Programs", "Onesidian") : join(dest, "helper");
+const helperDest = process.env.LOCALAPPDATA ? join(process.env.LOCALAPPDATA, "Programs", "Scribble") : join(dest, "helper");
 mkdirSync(helperDest, { recursive: true });
 if (existsSync(helperDest)) {
   for (const f of readdirSync(helperDest)) {

@@ -23,7 +23,7 @@ foreach ($a in $Arch) {
   if (Test-Path $publish) { Remove-Item -Recurse -Force $publish }
   & $dotnet publish (Join-Path $root "helper\InkOverlay.csproj") -c Release -r "win-$a" -o $publish "-p:Version=$version"
   if ($LASTEXITCODE) { throw "publish for $a failed" }
-  & $Iscc "/DAppVersion=$version" "/DArch=$a" "/DSource=$publish" (Join-Path $here "Onesidian.iss")
+  & $Iscc "/DAppVersion=$version" "/DArch=$a" "/DSource=$publish" (Join-Path $here "Scribble.iss")
   if ($LASTEXITCODE) { throw "installer for $a failed" }
 }
-Get-ChildItem (Join-Path $here "output") -Filter "Onesidian-helper-$version-*.exe" | ForEach-Object { "{0}  {1:N0} MB" -f $_.Name, ($_.Length / 1MB) }
+Get-ChildItem (Join-Path $here "output") -Filter "Scribble-helper-$version-*.exe" | ForEach-Object { "{0}  {1:N0} MB" -f $_.Name, ($_.Length / 1MB) }

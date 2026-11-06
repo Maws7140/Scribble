@@ -57,6 +57,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $tag = "${{ github.ref_name }}"
-          $files = @("plugin/main.js", "plugin/manifest.json", "plugin/styles.css") + (Get-ChildItem installer/output -Filter "Onesidian-helper-$tag-*.exe" | ForEach-Object { $_.FullName })
+          $files = @("plugin/main.js", "plugin/manifest.json", "plugin/styles.css") + (Get-ChildItem installer/output -Filter "Scribble-helper-$tag-*.exe" | ForEach-Object { $_.FullName })
           if ($files.Count -ne 5) { throw "expected 5 release files, got $($files.Count)" }
           gh release create $tag @files --draft --title $tag --generate-notes

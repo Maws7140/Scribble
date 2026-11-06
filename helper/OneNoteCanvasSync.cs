@@ -468,7 +468,7 @@ public static class OneNoteCanvasSync
         {
             app.GetPageContent(state.PageId, out var xml, 1 /* piBinaryData */, OneNote.Xs2013);
             read = XDocument.Parse(xml).Root!;
-            temp = Path.Combine(Path.GetTempPath(), "onesidian-import-" + Guid.NewGuid().ToString("N"));
+            temp = Path.Combine(Path.GetTempPath(), "scribble-import-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(temp);
         }
         var pageCards = OneNoteImport.BuildCards(read, temp);

@@ -9,7 +9,7 @@ export const HELPER_PROTOCOL = 1;
  * Where people get the helper's installer. The plugin never downloads or installs it itself: Obsidian's
  * policies don't let a plugin install its own dependencies.
  */
-export const HELPER_DOWNLOAD = "https://github.com/Maws7140/Onesidian/releases/latest";
+export const HELPER_DOWNLOAD = "https://github.com/Maws7140/Scribble/releases/latest";
 
 /** "updating": its installer (or uninstaller) is replacing it right now; it starts again once that's done. */
 export type HelperProblem = "missing" | "outdated" | "not-windows" | "updating";
@@ -17,11 +17,11 @@ export type HelperProblem = "missing" | "outdated" | "not-windows" | "updating";
 /** Where the installer puts the helper: per user, so it needs no admin prompt. */
 export function installedHelperDir(): string | null {
   const local = process.env.LOCALAPPDATA;
-  return local ? path.join(local, "Programs", "Onesidian") : null;
+  return local ? path.join(local, "Programs", "Scribble") : null;
 }
 
 /**
- * The installer and uninstaller put this file in the helper's folder while they work (installer/Onesidian.iss):
+ * The installer and uninstaller put this file in the helper's folder while they work (installer/Scribble.iss):
  * the plugin stops its helper so the files can be replaced, and doesn't start one until the file's gone. One
  * left behind by an installer that was killed is ignored after a while, so it can't keep the helper off.
  */
@@ -55,7 +55,7 @@ type CardProblem = Exclude<HelperProblem, "not-windows" | "updating">;
 const TEXT: Record<CardProblem, { title: string; body: string }> = {
   missing: {
     title: "Install the ink helper",
-    body: "Onesidian draws with the ink helper, a small Windows program that's installed separately. "
+    body: "Scribble draws with the ink helper, a small Windows program that's installed separately. "
       + "Download its installer, run it, and the plugin picks it up within a few seconds. It installs for you "
       + "alone, without an admin prompt.",
   },

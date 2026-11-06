@@ -1,5 +1,5 @@
 {
-  "name": "onesidian",
+  "name": "scribble",
   "version": "1.0.0",
   "private": true,
   "description": "Write and draw on Obsidian notes with a pen, using Windows Ink, and keep the ink in sync with OneNote.",

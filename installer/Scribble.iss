@@ -1,6 +1,6 @@
-; Onesidian's ink helper installer: for the current user only (no admin prompt), into %LOCALAPPDATA%\Programs\Onesidian,
+; Scribble's ink helper installer: for the current user only (no admin prompt), into %LOCALAPPDATA%\Programs\Scribble,
 ; where the plugin looks for it. Built by build.ps1, once per architecture.
-;   iscc /DAppVersion=1.0.0 /DArch=arm64 /DSource=..\helper\publish-arm64 Onesidian.iss
+;   iscc /DAppVersion=1.0.0 /DArch=arm64 /DSource=..\helper\publish-arm64 Scribble.iss
 
 #ifndef AppVersion
   #define AppVersion "0.0.0"
@@ -14,12 +14,12 @@
 
 [Setup]
 AppId={{49E864C6-8CA3-4040-B7F9-AC907FDE7847}
-AppName=Onesidian ink helper
+AppName=Scribble ink helper
 AppPublisher=Maws7140
-AppPublisherURL=https://github.com/Maws7140/Onesidian
+AppPublisherURL=https://github.com/Maws7140/Scribble
 AppVersion={#AppVersion}
-AppVerName=Onesidian ink helper {#AppVersion}
-DefaultDirName={localappdata}\Programs\Onesidian
+AppVerName=Scribble ink helper {#AppVersion}
+DefaultDirName={localappdata}\Programs\Scribble
 ; Always there: it's where the plugin looks.
 UsePreviousAppDir=no
 DisableDirPage=yes
@@ -36,13 +36,13 @@ ArchitecturesInstallIn64BitMode=x64os
 #endif
 MinVersion=10.0.17763
 OutputDir=output
-OutputBaseFilename=Onesidian-helper-{#AppVersion}-{#Arch}
+OutputBaseFilename=Scribble-helper-{#AppVersion}-{#Arch}
 Compression=lzma2/ultra64
 SolidCompression=yes
 ; Obsidian keeps the helper running: close it to replace it, and let the plugin start the new one.
 CloseApplications=force
 RestartApplications=no
-UninstallDisplayName=Onesidian ink helper
+UninstallDisplayName=Scribble ink helper
 UninstallDisplayIcon={app}\InkOverlay.exe
 WizardStyle=modern
 
@@ -51,7 +51,7 @@ WizardStyle=modern
 Source: "{#Source}\*"; DestDir: "{app}"; Excludes: "helper.log*,backups,*.pdb,*.old"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Messages]
-FinishedLabelNoIcons=The ink helper is installed. Onesidian picks it up within a few seconds; nothing else to do.
+FinishedLabelNoIcons=The ink helper is installed. Scribble picks it up within a few seconds; nothing else to do.
 
 [Code]
 // While installing or uninstalling, a ".updating" file in the helper's folder tells the plugin to stop its helper
@@ -100,7 +100,7 @@ var
 begin
   ForceDirectories(ExpandConstant('{app}'));
   MarkerPath := ExpandConstant('{app}\.updating');
-  SaveStringToFile(MarkerPath, 'Onesidian helper installer', False);
+  SaveStringToFile(MarkerPath, 'Scribble helper installer', False);
   for I := 1 to 40 do
   begin
     if GetArrayLength(HelperPids()) = 0 then

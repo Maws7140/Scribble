@@ -30,7 +30,7 @@ import { HELPER_DOWNLOAD, HELPER_PROTOCOL, HelperProblem, HelperSetupModal, find
  * Every animation frame we measure the note's content area and its text column, and send changes
  * to the helper. The helper keeps the ink glued to the text column as you scroll.
  */
-export default class OnesidianPlugin extends Plugin implements ToolbarHost, MathHost {
+export default class ScribblePlugin extends Plugin implements ToolbarHost, MathHost {
   settings: InkSettings = structuredClone(DEFAULT_SETTINGS);
   scratchOutAvailable = true;
   private helper: ChildProcessWithoutNullStreams | null = null;
@@ -377,7 +377,7 @@ export default class OnesidianPlugin extends Plugin implements ToolbarHost, Math
 
   onunload() {
     this.unloading = true;
-    for (const request of this.printRequests.values()) request.reject(new Error("Onesidian was unloaded during PDF export."));
+    for (const request of this.printRequests.values()) request.reject(new Error("Scribble was unloaded during PDF export."));
     this.printRequests.clear();
     for (const proc of this.printWorkers) proc.kill();
     this.printWorkers.clear();
@@ -435,7 +435,7 @@ export default class OnesidianPlugin extends Plugin implements ToolbarHost, Math
       snapshot = await new Promise<string | null>((resolve, reject) => {
         const timeout = window.setTimeout(() => {
           this.printRequests.delete(id);
-          reject(new Error("Onesidian: the pen helper did not provide its latest ink. Restart the ink helper and retry PDF export."));
+          reject(new Error("Scribble: the pen helper did not provide its latest ink. Restart the ink helper and retry PDF export."));
         }, 30_000);
         this.printRequests.set(id, {
           resolve: (data) => { window.clearTimeout(timeout); resolve(data); },
@@ -445,13 +445,13 @@ export default class OnesidianPlugin extends Plugin implements ToolbarHost, Math
       });
     }
     const exe = findHelper(this.pluginDir());
-    if (!exe) throw new Error("Onesidian: the ink helper isn't installed, so the ink can't go in the PDF.");
+    if (!exe) throw new Error("Scribble: the ink helper isn't installed, so the ink can't go in the PDF.");
     return new Promise<PrintStroke[]>((resolve, reject) => {
       const proc = spawn(exe, ["--print-ink"], { stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
       this.printWorkers.add(proc);
       const timeout = window.setTimeout(() => {
         proc.kill();
-        reject(new Error("Onesidian: timed out rendering ink for PDF export."));
+        reject(new Error("Scribble: timed out rendering ink for PDF export."));
       }, 30_000);
       let buffered = "";
       let received = false;
@@ -473,13 +473,13 @@ export default class OnesidianPlugin extends Plugin implements ToolbarHost, Math
           } catch { /* optional renderer diagnostics, not a response */ }
         }
       });
-      proc.stderr.on("data", (data: Buffer) => console.error("[onesidian] PDF renderer:", data.toString()));
+      proc.stderr.on("data", (data: Buffer) => console.error("[scribble] PDF renderer:", data.toString()));
       proc.on("error", fail);
       proc.stdin.on("error", fail);
       proc.on("close", () => {
         this.printWorkers.delete(proc);
         window.clearTimeout(timeout);
-        if (!received) reject(new Error("Onesidian: the PDF renderer stopped before returning its ink."));
+        if (!received) reject(new Error("Scribble: the PDF renderer stopped before returning its ink."));
       });
       proc.stdin.end(JSON.stringify({ inkPath: this.inkPathFor(base, file.path), hashes, tops: reference.tops, snapshot,
         mode: preview ? "preview" : undefined, dark: preview && isDarkTheme() }) + "\n");
@@ -593,8 +593,8 @@ export default class OnesidianPlugin extends Plugin implements ToolbarHost, Math
     try {
       proc = spawn(exe, this.settings.gpuRendering ? ["--gpu"] : [], { stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
     } catch (e) {
-      new Notice("Onesidian: could not start helper");
-      console.error("[onesidian]", e);
+      new Notice("Scribble: could not start helper");
+      console.error("[scribble]", e);
       return;
     }
     if (asStandby) this.standby = proc;
@@ -618,7 +618,7 @@ export default class OnesidianPlugin extends Plugin implements ToolbarHost, Math
       }
     });
     proc.stderr.setEncoding("utf8");
-    proc.stderr.on("data", (d: string) => console.error("[onesidian]", d));
+    proc.stderr.on("data", (d: string) => console.error("[scribble]", d));
     proc.on("error", (e) => {
       if (proc === this.standby) { this.standby = null; return; }
       if (proc !== this.helper) return;
@@ -626,7 +626,7 @@ export default class OnesidianPlugin extends Plugin implements ToolbarHost, Math
       this.domInk.releaseNative();
       // Gone from under us (being updated, or uninstalled): start it again once it's back (see retryHelper).
       if ((e as NodeJS.ErrnoException).code === "ENOENT") this.helperProblem = "missing";
-      else new Notice("Onesidian: the ink helper failed: " + e.message);
+      else new Notice("Scribble: the ink helper failed: " + e.message);
     });
     proc.on("exit", (code) => {
       if (proc === this.standby) { this.standby = null; return; }
@@ -639,11 +639,11 @@ export default class OnesidianPlugin extends Plugin implements ToolbarHost, Math
       const now = Date.now();
       this.restarts = this.restarts.filter((t) => now - t < 60_000);
       if (this.restarts.length >= 5) {
-        new Notice(`Onesidian: the ink helper keeps stopping. Details: ${path.join(path.dirname(this.helperPath), "helper.log")}`);
+        new Notice(`Scribble: the ink helper keeps stopping. Details: ${path.join(path.dirname(this.helperPath), "helper.log")}`);
         return;
       }
       this.restarts.push(now);
-      console.debug(`[onesidian] helper exited (${code}); restarting`);
+      console.debug(`[scribble] helper exited (${code}); restarting`);
       window.setTimeout(() => {
         if (this.unloading || this.helper) return;
         this.startHelper();
@@ -671,7 +671,7 @@ export default class OnesidianPlugin extends Plugin implements ToolbarHost, Math
     }
     if (this.helperProblemShown.has(problem)) return;
     this.helperProblemShown.add(problem);
-    if (problem === "not-windows") new Notice("Onesidian needs Windows: its ink is Windows Ink.", 10_000);
+    if (problem === "not-windows") new Notice("Scribble needs Windows: its ink is Windows Ink.", 10_000);
     else {
       this.setupModal = new HelperSetupModal(this.app, problem);
       this.setupModal.open();
@@ -713,7 +713,7 @@ export default class OnesidianPlugin extends Plugin implements ToolbarHost, Math
    */
   private watchHelperUpdate() {
     if (this.unloading || !this.helper || !isInstalledHelper(this.helperPath) || !helperBeingUpdated()) return;
-    console.debug("[onesidian] the ink helper is being updated; stopping it until that's done");
+    console.debug("[scribble] the ink helper is being updated; stopping it until that's done");
     this.helperProblem = "updating";
     window.clearTimeout(this.helloTimer);
     for (const proc of [this.helper, this.standby]) {
@@ -761,7 +761,7 @@ export default class OnesidianPlugin extends Plugin implements ToolbarHost, Math
     } else {
       this.send({ type: "reload" });
     }
-    console.debug("[onesidian] ink helper replaced without a gap");
+    console.debug("[scribble] ink helper replaced without a gap");
   }
 
   private onHelperMessage(line: string, from?: ChildProcessWithoutNullStreams) {
@@ -787,7 +787,7 @@ export default class OnesidianPlugin extends Plugin implements ToolbarHost, Math
     try {
       msg = JSON.parse(line);
     } catch {
-      console.debug("[onesidian]", line);
+      console.debug("[scribble]", line);
       return;
     }
     switch (msg.type) {
@@ -887,7 +887,7 @@ export default class OnesidianPlugin extends Plugin implements ToolbarHost, Math
         if (msg.linear) void this.onInkMath(msg.id ?? 0, msg.inkPath ?? "", msg.line ?? -1, msg.lineEnd ?? msg.line ?? -1, msg.linear, msg.latex);
         break;
       default:
-        console.debug("[onesidian]", line);
+        console.debug("[scribble]", line);
     }
   }
 
@@ -982,7 +982,7 @@ export default class OnesidianPlugin extends Plugin implements ToolbarHost, Math
       // Circuit breaker: six background sends in a minute isn't typing, it's a loop. Stop for a while.
       this.pausedUntil.set(path, now + 5 * 60_000);
       this.recentSends.set(path, []);
-      console.warn(`[onesidian] background sync of ${path} paused: it kept re-sending`);
+      console.warn(`[scribble] background sync of ${path} paused: it kept re-sending`);
       this.send({ type: "debug", message: `background OneNote sync of ${path} paused for 5 minutes: ${sends.length} sends in a minute` });
       return;
     }
@@ -1033,7 +1033,7 @@ export default class OnesidianPlugin extends Plugin implements ToolbarHost, Math
     const file = this.app.vault.getFileByPath(canvasPath);
     if (!file || !base) return;
     if (!this.helper) {
-      if (navigate) new Notice("Onesidian: the ink helper isn't running");
+      if (navigate) new Notice("Scribble: the ink helper isn't running");
       return;
     }
     let link = this.settings.oneNoteCanvasSync[canvasPath];
@@ -1568,7 +1568,7 @@ export default class OnesidianPlugin extends Plugin implements ToolbarHost, Math
     try {
       if (await insertRecognized(this.app, view, lines)) this.send({ type: "consume", id });
     } catch (e) {
-      console.error("[onesidian] ink to text", e);
+      console.error("[scribble] ink to text", e);
       new Notice("Ink to Text failed; the ink is still there");
     }
   }
@@ -1639,7 +1639,7 @@ export default class OnesidianPlugin extends Plugin implements ToolbarHost, Math
     const base = this.vaultPath();
     if (!view?.file || !base) return;
     if (!this.helper) {
-      new Notice("Onesidian: the ink helper isn't running");
+      new Notice("Scribble: the ink helper isn't running");
       return;
     }
     const notePath = view.file.path;
@@ -1665,7 +1665,7 @@ export default class OnesidianPlugin extends Plugin implements ToolbarHost, Math
     const inkPath = this.inkPathFor(base, notePath);
     const layout = lineTops(view, sizer, (this.inkBottom.get(inkPath) ?? 0) > 0);
     if (!layout) {
-      if (navigate) new Notice("Onesidian: the note isn't laid out yet; try again in a moment");
+      if (navigate) new Notice("Scribble: the note isn't laid out yet; try again in a moment");
       else this.pendingPush.add(notePath);
       return;
     }
@@ -2058,7 +2058,7 @@ export default class OnesidianPlugin extends Plugin implements ToolbarHost, Math
               if (seeded && !this.inkBottom.has(path)) this.inkBottom.set(path, Math.max(0, ...strokes.map(s => s.y + s.h)));
             }).catch((error: Error) => {
               this.previewRetry.set(path, Date.now() + 5000);
-              console.error("[onesidian] passive ink:", error);
+              console.error("[scribble] passive ink:", error);
             }).finally(() => this.previewLoading.delete(path));
           }
         }
@@ -2655,7 +2655,7 @@ class ConfirmModal extends Modal {
 
 /** Mirrors OneNote's Options › Advanced › Pen, for the options Windows Ink can honour. */
 class InkSettingTab extends PluginSettingTab {
-  constructor(app: App, private plugin: OnesidianPlugin) {
+  constructor(app: App, private plugin: ScribblePlugin) {
     super(app, plugin);
   }
 
@@ -2665,7 +2665,7 @@ class InkSettingTab extends PluginSettingTab {
     containerEl.empty();
 
     const p = this.plugin;
-    const status = p.helperProblem === "not-windows" ? "Needs Windows: Onesidian's ink is Windows Ink."
+    const status = p.helperProblem === "not-windows" ? "Needs Windows: Scribble's ink is Windows Ink."
       : p.helperProblem === "missing" ? "Not installed. Download its installer and run it; the plugin picks it up within a few seconds."
       : p.helperProblem === "outdated" ? "Doesn't match this version of the plugin. Download and run the helper for this version."
       : p.helperProblem === "updating" ? "Being updated; it starts again once its installer's done."
