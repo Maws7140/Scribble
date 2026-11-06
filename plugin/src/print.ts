@@ -121,7 +121,7 @@ export class InkPrint {
   private parts(root: HTMLElement, text: string, lineHeight: number): PrintPart[] {
     // The print context has no source ranges. Reuse Reading view's parser, including plugin blocks.
     const parser = MarkdownPreviewRenderer.prototype as unknown as { parseSync?: (this: unknown) => void };
-    if (!parser.parseSync) throw new Error("OneNote Ink: this Obsidian version cannot map ink to PDF blocks.");
+    if (!parser.parseSync) throw new Error("Onesidian: this Obsidian version cannot map ink to PDF blocks.");
     let parsed: ParsedSection[] = [];
     parser.parseSync.call({ text, parseFrontmatter: true,
       parseFinish: (_text: string, result: { sections: ParsedSection[] }) => { parsed = result.sections; } });
@@ -142,12 +142,12 @@ export class InkPrint {
       }
     };
     for (const section of parsed) {
-      const template = root.ownerDocument.createElement("template");
-      template.innerHTML = section.html;
-      const count = template.content.children.length;
+      // Parsed into a detached document: nothing in it runs or loads.
+      const parsedBlocks = new DOMParser().parseFromString(section.html, "text/html").body;
+      const count = parsedBlocks.children.length;
       if (!count) continue;
       const children = blocks.slice(at, at + count);
-      if (children.length !== count) throw new Error("OneNote Ink: PDF blocks changed while adding ink. Export cancelled.");
+      if (children.length !== count) throw new Error("Onesidian: PDF blocks changed while adding ink. Export cancelled.");
       at += count;
       const start = section.pos.start.line;
       const end = section.pos.end.line;
@@ -163,13 +163,13 @@ export class InkPrint {
       // The print renderer does not add the list line markers that Reading view supplies. Its parser
       // does: carry those across so ink by a list item follows that item rather than an even estimate.
       if (el.tagName === "UL" || el.tagName === "OL") {
-        const sourceItems = Array.from(template.content.querySelectorAll<HTMLElement>("li[data-line]"));
+        const sourceItems = Array.from(parsedBlocks.querySelectorAll<HTMLElement>("li[data-line]"));
         const items = Array.from(el.querySelectorAll<HTMLElement>("li"));
         if (sourceItems.length === items.length) items.forEach((item, i) => { item.dataset.line = sourceItems[i].dataset.line; });
       }
       result.push({ el, start, end });
     }
-    if (at !== blocks.length) throw new Error("OneNote Ink: could not match every PDF block to its ink. Export cancelled.");
+    if (at !== blocks.length) throw new Error("Onesidian: could not match every PDF block to its ink. Export cancelled.");
     blanks(previous + 1, lines.length - 1, null);
     return result;
   }

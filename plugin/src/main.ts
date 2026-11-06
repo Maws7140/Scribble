@@ -23,14 +23,14 @@ import { CanvasTouch, TouchCanvas } from "./canvastouch";
 import { ruleCanvas } from "./canvaslines";
 import { InkPrint, PrintReference, PrintStroke } from "./print";
 import { clearCoordinateProbes } from "./coordinates";
-import { HELPER_DOWNLOAD, HELPER_PROTOCOL, HelperProblem, HelperSetupModal, copyOldBackups, findHelper, helperBeingUpdated, isInstalledHelper } from "./helperinstall";
+import { HELPER_DOWNLOAD, HELPER_PROTOCOL, HelperProblem, HelperSetupModal, findHelper, helperBeingUpdated, isInstalledHelper } from "./helperinstall";
 
 /**
  * Drives a native Windows Ink overlay (helper/InkOverlay.exe) that sits over the active note.
  * Every animation frame we measure the note's content area and its text column, and send changes
  * to the helper. The helper keeps the ink glued to the text column as you scroll.
  */
-export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, MathHost {
+export default class OnesidianPlugin extends Plugin implements ToolbarHost, MathHost {
   settings: InkSettings = structuredClone(DEFAULT_SETTINGS);
   scratchOutAvailable = true;
   private helper: ChildProcessWithoutNullStreams | null = null;
@@ -377,7 +377,7 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
 
   onunload() {
     this.unloading = true;
-    for (const request of this.printRequests.values()) request.reject(new Error("OneNote Ink was unloaded during PDF export."));
+    for (const request of this.printRequests.values()) request.reject(new Error("Onesidian was unloaded during PDF export."));
     this.printRequests.clear();
     for (const proc of this.printWorkers) proc.kill();
     this.printWorkers.clear();
@@ -435,7 +435,7 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
       snapshot = await new Promise<string | null>((resolve, reject) => {
         const timeout = window.setTimeout(() => {
           this.printRequests.delete(id);
-          reject(new Error("OneNote Ink: the pen helper did not provide its latest ink. Restart the ink helper and retry PDF export."));
+          reject(new Error("Onesidian: the pen helper did not provide its latest ink. Restart the ink helper and retry PDF export."));
         }, 30_000);
         this.printRequests.set(id, {
           resolve: (data) => { window.clearTimeout(timeout); resolve(data); },
@@ -445,13 +445,13 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
       });
     }
     const exe = findHelper(this.pluginDir());
-    if (!exe) throw new Error("OneNote Ink: the ink helper isn't installed, so the ink can't go in the PDF.");
+    if (!exe) throw new Error("Onesidian: the ink helper isn't installed, so the ink can't go in the PDF.");
     return new Promise<PrintStroke[]>((resolve, reject) => {
       const proc = spawn(exe, ["--print-ink"], { stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
       this.printWorkers.add(proc);
       const timeout = window.setTimeout(() => {
         proc.kill();
-        reject(new Error("OneNote Ink: timed out rendering ink for PDF export."));
+        reject(new Error("Onesidian: timed out rendering ink for PDF export."));
       }, 30_000);
       let buffered = "";
       let received = false;
@@ -473,13 +473,13 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
           } catch { /* optional renderer diagnostics, not a response */ }
         }
       });
-      proc.stderr.on("data", (data: Buffer) => console.error("[onenote-ink] PDF renderer:", data.toString()));
+      proc.stderr.on("data", (data: Buffer) => console.error("[onesidian] PDF renderer:", data.toString()));
       proc.on("error", fail);
       proc.stdin.on("error", fail);
       proc.on("close", () => {
         this.printWorkers.delete(proc);
         window.clearTimeout(timeout);
-        if (!received) reject(new Error("OneNote Ink: the PDF renderer stopped before returning its ink."));
+        if (!received) reject(new Error("Onesidian: the PDF renderer stopped before returning its ink."));
       });
       proc.stdin.end(JSON.stringify({ inkPath: this.inkPathFor(base, file.path), hashes, tops: reference.tops, snapshot,
         mode: preview ? "preview" : undefined, dark: preview && isDarkTheme() }) + "\n");
@@ -586,7 +586,6 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
     }
     this.helperProblem = null;
     if (!asStandby) {
-      copyOldBackups(this.pluginDir(), exe);
       this.helperPath = exe;
       this.helperVersion = "";
     }
@@ -594,8 +593,8 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
     try {
       proc = spawn(exe, this.settings.gpuRendering ? ["--gpu"] : [], { stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
     } catch (e) {
-      new Notice("OneNote Ink: could not start helper");
-      console.error("[onenote-ink]", e);
+      new Notice("Onesidian: could not start helper");
+      console.error("[onesidian]", e);
       return;
     }
     if (asStandby) this.standby = proc;
@@ -619,7 +618,7 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
       }
     });
     proc.stderr.setEncoding("utf8");
-    proc.stderr.on("data", (d: string) => console.error("[onenote-ink]", d));
+    proc.stderr.on("data", (d: string) => console.error("[onesidian]", d));
     proc.on("error", (e) => {
       if (proc === this.standby) { this.standby = null; return; }
       if (proc !== this.helper) return;
@@ -627,7 +626,7 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
       this.domInk.releaseNative();
       // Gone from under us (being updated, or uninstalled): start it again once it's back (see retryHelper).
       if ((e as NodeJS.ErrnoException).code === "ENOENT") this.helperProblem = "missing";
-      else new Notice("OneNote Ink helper failed: " + e.message);
+      else new Notice("Onesidian: the ink helper failed: " + e.message);
     });
     proc.on("exit", (code) => {
       if (proc === this.standby) { this.standby = null; return; }
@@ -640,11 +639,11 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
       const now = Date.now();
       this.restarts = this.restarts.filter((t) => now - t < 60_000);
       if (this.restarts.length >= 5) {
-        new Notice(`OneNote Ink: the ink helper keeps stopping. Details: ${path.join(path.dirname(this.helperPath), "helper.log")}`);
+        new Notice(`Onesidian: the ink helper keeps stopping. Details: ${path.join(path.dirname(this.helperPath), "helper.log")}`);
         return;
       }
       this.restarts.push(now);
-      console.log(`[onenote-ink] helper exited (${code}); restarting`);
+      console.debug(`[onesidian] helper exited (${code}); restarting`);
       window.setTimeout(() => {
         if (this.unloading || this.helper) return;
         this.startHelper();
@@ -672,7 +671,7 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
     }
     if (this.helperProblemShown.has(problem)) return;
     this.helperProblemShown.add(problem);
-    if (problem === "not-windows") new Notice("OneNote Ink needs Windows: its ink is Windows Ink.", 10_000);
+    if (problem === "not-windows") new Notice("Onesidian needs Windows: its ink is Windows Ink.", 10_000);
     else {
       this.setupModal = new HelperSetupModal(this.app, problem);
       this.setupModal.open();
@@ -714,7 +713,7 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
    */
   private watchHelperUpdate() {
     if (this.unloading || !this.helper || !isInstalledHelper(this.helperPath) || !helperBeingUpdated()) return;
-    console.log("[onenote-ink] the ink helper is being updated; stopping it until that's done");
+    console.debug("[onesidian] the ink helper is being updated; stopping it until that's done");
     this.helperProblem = "updating";
     window.clearTimeout(this.helloTimer);
     for (const proc of [this.helper, this.standby]) {
@@ -762,7 +761,7 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
     } else {
       this.send({ type: "reload" });
     }
-    console.log("[onenote-ink] ink helper replaced without a gap");
+    console.debug("[onesidian] ink helper replaced without a gap");
   }
 
   private onHelperMessage(line: string, from?: ChildProcessWithoutNullStreams) {
@@ -788,7 +787,7 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
     try {
       msg = JSON.parse(line);
     } catch {
-      console.log("[onenote-ink]", line);
+      console.debug("[onesidian]", line);
       return;
     }
     switch (msg.type) {
@@ -888,7 +887,7 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
         if (msg.linear) void this.onInkMath(msg.id ?? 0, msg.inkPath ?? "", msg.line ?? -1, msg.lineEnd ?? msg.line ?? -1, msg.linear, msg.latex);
         break;
       default:
-        console.log("[onenote-ink]", line);
+        console.debug("[onesidian]", line);
     }
   }
 
@@ -983,7 +982,7 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
       // Circuit breaker: six background sends in a minute isn't typing, it's a loop. Stop for a while.
       this.pausedUntil.set(path, now + 5 * 60_000);
       this.recentSends.set(path, []);
-      console.warn(`[onenote-ink] background sync of ${path} paused: it kept re-sending`);
+      console.warn(`[onesidian] background sync of ${path} paused: it kept re-sending`);
       this.send({ type: "debug", message: `background OneNote sync of ${path} paused for 5 minutes: ${sends.length} sends in a minute` });
       return;
     }
@@ -1034,7 +1033,7 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
     const file = this.app.vault.getFileByPath(canvasPath);
     if (!file || !base) return;
     if (!this.helper) {
-      if (navigate) new Notice("OneNote Ink: the ink helper isn't running");
+      if (navigate) new Notice("Onesidian: the ink helper isn't running");
       return;
     }
     let link = this.settings.oneNoteCanvasSync[canvasPath];
@@ -1569,7 +1568,7 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
     try {
       if (await insertRecognized(this.app, view, lines)) this.send({ type: "consume", id });
     } catch (e) {
-      console.error("[onenote-ink] ink to text", e);
+      console.error("[onesidian] ink to text", e);
       new Notice("Ink to Text failed; the ink is still there");
     }
   }
@@ -1640,7 +1639,7 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
     const base = this.vaultPath();
     if (!view?.file || !base) return;
     if (!this.helper) {
-      new Notice("OneNote Ink: the ink helper isn't running");
+      new Notice("Onesidian: the ink helper isn't running");
       return;
     }
     const notePath = view.file.path;
@@ -1666,7 +1665,7 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
     const inkPath = this.inkPathFor(base, notePath);
     const layout = lineTops(view, sizer, (this.inkBottom.get(inkPath) ?? 0) > 0);
     if (!layout) {
-      if (navigate) new Notice("OneNote Ink: the note isn't laid out yet; try again in a moment");
+      if (navigate) new Notice("Onesidian: the note isn't laid out yet; try again in a moment");
       else this.pendingPush.add(notePath);
       return;
     }
@@ -2059,7 +2058,7 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
               if (seeded && !this.inkBottom.has(path)) this.inkBottom.set(path, Math.max(0, ...strokes.map(s => s.y + s.h)));
             }).catch((error: Error) => {
               this.previewRetry.set(path, Date.now() + 5000);
-              console.error("[onenote-ink] passive ink:", error);
+              console.error("[onesidian] passive ink:", error);
             }).finally(() => this.previewLoading.delete(path));
           }
         }
@@ -2656,7 +2655,7 @@ class ConfirmModal extends Modal {
 
 /** Mirrors OneNote's Options › Advanced › Pen, for the options Windows Ink can honour. */
 class InkSettingTab extends PluginSettingTab {
-  constructor(app: App, private plugin: OneNoteInkPlugin) {
+  constructor(app: App, private plugin: OnesidianPlugin) {
     super(app, plugin);
   }
 
@@ -2666,7 +2665,7 @@ class InkSettingTab extends PluginSettingTab {
     containerEl.empty();
 
     const p = this.plugin;
-    const status = p.helperProblem === "not-windows" ? "Needs Windows: OneNote Ink's ink is Windows Ink."
+    const status = p.helperProblem === "not-windows" ? "Needs Windows: Onesidian's ink is Windows Ink."
       : p.helperProblem === "missing" ? "Not installed. Download its installer and run it; the plugin picks it up within a few seconds."
       : p.helperProblem === "outdated" ? "Doesn't match this version of the plugin. Download and run the helper for this version."
       : p.helperProblem === "updating" ? "Being updated; it starts again once its installer's done."

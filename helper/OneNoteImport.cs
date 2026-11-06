@@ -82,7 +82,7 @@ public static class OneNoteImport
     {
         app.GetPageContent(req.PageId, out var xml, 1 /* piBinaryData */, OneNote.Xs2013);
         var root = XDocument.Parse(xml).Root!;
-        var temp = Path.Combine(Path.GetTempPath(), "onenote-ink-import-" + Guid.NewGuid().ToString("N"));
+        var temp = Path.Combine(Path.GetTempPath(), "onesidian-import-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(temp);
 
         var title = root.Attribute("name")?.Value ?? "";

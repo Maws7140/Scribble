@@ -1,9 +1,10 @@
 {
-  "id": "onenote-ink",
-  "name": "OneNote Ink",
-  "version": "0.0.1",
-  "minAppVersion": "1.5.0",
-  "description": "Windows Ink layer on top of your notes, saved in OneNote's ink format.",
-  "author": "Lilly",
+  "id": "onesidian",
+  "name": "Onesidian",
+  "version": "1.0.0",
+  "minAppVersion": "1.7.2",
+  "description": "Write and draw on your notes with a pen, using Windows Ink, and keep the ink in sync with OneNote.",
+  "author": "Maws7140",
+  "authorUrl": "https://github.com/Maws7140",
   "isDesktopOnly": true
 }

@@ -17,11 +17,11 @@ export type HelperProblem = "missing" | "outdated" | "not-windows" | "updating";
 /** Where the installer puts the helper: per user, so it needs no admin prompt. */
 export function installedHelperDir(): string | null {
   const local = process.env.LOCALAPPDATA;
-  return local ? path.join(local, "Programs", "OneNote Ink") : null;
+  return local ? path.join(local, "Programs", "Onesidian") : null;
 }
 
 /**
- * The installer and uninstaller put this file in the helper's folder while they work (installer/OneNoteInk.iss):
+ * The installer and uninstaller put this file in the helper's folder while they work (installer/Onesidian.iss):
  * the plugin stops its helper so the files can be replaced, and doesn't start one until the file's gone. One
  * left behind by an installer that was killed is ignored after a while, so it can't keep the helper off.
  */
@@ -50,32 +50,12 @@ export function findHelper(pluginDir: string | null): string | null {
   return null;
 }
 
-/**
- * Before the helper had an installer it lived in the plugin's folder, and so did its backups of ink that pulls
- * from OneNote replaced. Copy any it doesn't have yet to where it runs from now (the old ones are left as they are).
- */
-export function copyOldBackups(pluginDir: string | null, exe: string) {
-  if (!pluginDir) return;
-  const from = path.join(pluginDir, "helper", "backups");
-  const to = path.join(path.dirname(exe), "backups");
-  if (path.resolve(from) === path.resolve(to) || !fs.existsSync(from)) return;
-  try {
-    fs.mkdirSync(to, { recursive: true });
-    for (const name of fs.readdirSync(from)) {
-      const target = path.join(to, name);
-      if (!fs.existsSync(target)) fs.copyFileSync(path.join(from, name), target);
-    }
-  } catch (e) {
-    console.error("[onenote-ink] copying old ink backups:", e);
-  }
-}
-
 type CardProblem = Exclude<HelperProblem, "not-windows" | "updating">;
 
 const TEXT: Record<CardProblem, { title: string; body: string }> = {
   missing: {
     title: "Install the ink helper",
-    body: "OneNote Ink draws with the ink helper, a small Windows program that's installed separately. "
+    body: "Onesidian draws with the ink helper, a small Windows program that's installed separately. "
       + "Download its installer, run it, and the plugin picks it up within a few seconds. It installs for you "
       + "alone, without an admin prompt.",
   },

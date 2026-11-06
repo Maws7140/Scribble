@@ -1,14 +1,14 @@
 {
-  "name": "onenote-ink",
-  "version": "0.0.1",
+  "name": "onesidian",
+  "version": "1.0.0",
   "private": true,
-  "description": "Windows Ink layer on top of Obsidian notes, saved in OneNote's ink format.",
+  "description": "Write and draw on Obsidian notes with a pen, using Windows Ink, and keep the ink in sync with OneNote.",
   "main": "main.js",
   "scripts": {
     "build": "tsc --noEmit --skipLibCheck && node esbuild.config.mjs",
     "install-vault": "node install.mjs"
   },
-  "author": "Lilly",
+  "author": "Maws7140",
   "license": "MIT",
   "devDependencies": {
     "@codemirror/state": "^6.7.6",

@@ -240,7 +240,7 @@ export function withoutEchoes(text: string, changes: TextChange[]): TextChange[]
     if (c.kind !== "new") return true;
     const block = asOneNoteSees(c.markdown);
     const echo = block.length > 0 && note.includes(block);
-    if (echo) console.log("[onenote-ink] ignored a OneNote block that duplicates the note:", c.markdown.slice(0, 60));
+    if (echo) console.debug("[onesidian] ignored a OneNote block that duplicates the note:", c.markdown.slice(0, 60));
     return !echo;
   });
 }

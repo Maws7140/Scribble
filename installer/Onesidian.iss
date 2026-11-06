@@ -1,6 +1,6 @@
-; The ink helper's installer: for the current user only (no admin prompt), into %LOCALAPPDATA%\Programs\OneNote Ink,
+; Onesidian's ink helper installer: for the current user only (no admin prompt), into %LOCALAPPDATA%\Programs\Onesidian,
 ; where the plugin looks for it. Built by build.ps1, once per architecture.
-;   iscc /DAppVersion=0.0.1 /DArch=arm64 /DSource=..\helper\publish-arm64 OneNoteInk.iss
+;   iscc /DAppVersion=1.0.0 /DArch=arm64 /DSource=..\helper\publish-arm64 Onesidian.iss
 
 #ifndef AppVersion
   #define AppVersion "0.0.0"
@@ -14,10 +14,14 @@
 
 [Setup]
 AppId={{49E864C6-8CA3-4040-B7F9-AC907FDE7847}
-AppName=OneNote Ink helper
+AppName=Onesidian ink helper
+AppPublisher=Maws7140
+AppPublisherURL=https://github.com/Maws7140/Onesidian
 AppVersion={#AppVersion}
-AppVerName=OneNote Ink helper {#AppVersion}
-DefaultDirName={localappdata}\Programs\OneNote Ink
+AppVerName=Onesidian ink helper {#AppVersion}
+DefaultDirName={localappdata}\Programs\Onesidian
+; Always there: it's where the plugin looks.
+UsePreviousAppDir=no
 DisableDirPage=yes
 DisableProgramGroupPage=yes
 DisableReadyPage=yes
@@ -32,13 +36,13 @@ ArchitecturesInstallIn64BitMode=x64os
 #endif
 MinVersion=10.0.17763
 OutputDir=output
-OutputBaseFilename=OneNoteInkHelper-{#AppVersion}-{#Arch}
+OutputBaseFilename=Onesidian-helper-{#AppVersion}-{#Arch}
 Compression=lzma2/ultra64
 SolidCompression=yes
 ; Obsidian keeps the helper running: close it to replace it, and let the plugin start the new one.
 CloseApplications=force
 RestartApplications=no
-UninstallDisplayName=OneNote Ink helper
+UninstallDisplayName=Onesidian ink helper
 UninstallDisplayIcon={app}\InkOverlay.exe
 WizardStyle=modern
 
@@ -47,7 +51,7 @@ WizardStyle=modern
 Source: "{#Source}\*"; DestDir: "{app}"; Excludes: "helper.log*,backups,*.pdb,*.old"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Messages]
-FinishedLabelNoIcons=The ink helper is installed. OneNote Ink in Obsidian picks it up within a few seconds; nothing else to do.
+FinishedLabelNoIcons=The ink helper is installed. Onesidian picks it up within a few seconds; nothing else to do.
 
 [Code]
 // While installing or uninstalling, a ".updating" file in the helper's folder tells the plugin to stop its helper
@@ -96,7 +100,7 @@ var
 begin
   ForceDirectories(ExpandConstant('{app}'));
   MarkerPath := ExpandConstant('{app}\.updating');
-  SaveStringToFile(MarkerPath, 'OneNote Ink helper installer', False);
+  SaveStringToFile(MarkerPath, 'Onesidian helper installer', False);
   for I := 1 to 40 do
   begin
     if GetArrayLength(HelperPids()) = 0 then

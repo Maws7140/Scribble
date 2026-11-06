@@ -1,0 +1,10 @@
+{
+  "id": "onesidian",
+  "name": "Onesidian",
+  "version": "1.0.0",
+  "minAppVersion": "1.7.2",
+  "description": "Write and draw on your notes with a pen, using Windows Ink, and keep the ink in sync with OneNote.",
+  "author": "Maws7140",
+  "authorUrl": "https://github.com/Maws7140",
+  "isDesktopOnly": true
+}

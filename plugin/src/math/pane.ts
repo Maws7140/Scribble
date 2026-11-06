@@ -4,7 +4,7 @@ import { nerdamer } from "./cas";
 import { GraphView, parseGraph } from "./graph";
 import { makeQuiz, quizMarkdown } from "./quiz";
 
-export const MATH_VIEW = "onenote-ink-math";
+export const MATH_VIEW = "onesidian-math";
 
 /** Where a problem came from: handwriting (which can be fixed or converted) or typed math in a note. */
 export interface MathSource {

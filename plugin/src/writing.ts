@@ -128,7 +128,7 @@ export class HandwritingIndex {
     try {
       if (await this.app.vault.adapter.exists(this.file)) this.entries = JSON.parse(await this.app.vault.adapter.read(this.file));
     } catch (e) {
-      console.warn("[onenote-ink] handwriting index unreadable; rebuilding", e);
+      console.warn("[onesidian] handwriting index unreadable; rebuilding", e);
       this.entries = {};
     }
   }

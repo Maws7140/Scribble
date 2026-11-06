@@ -1,0 +1,62 @@
+# Pushing a version tag (e.g. 1.0.0, matching manifest.json; no "v") builds the plugin and both helper installers
+# and puts them in a draft GitHub release, to check and publish by hand.
+name: Release
+
+on:
+  push:
+    tags: ["[0-9]+.[0-9]+.[0-9]+"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: plugin/package-lock.json
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Check the versions match the tag
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          foreach ($f in "manifest.json", "plugin/manifest.json", "plugin/package.json") {
+            $v = (Get-Content $f -Raw | ConvertFrom-Json).version
+            if ($v -ne $tag) { throw "$f says $v but the tag is $tag" }
+          }
+          if (-not (Get-Content versions.json -Raw | ConvertFrom-Json).$tag) { throw "versions.json has no entry for $tag" }
+          if ((Get-Content manifest.json -Raw) -ne (Get-Content plugin/manifest.json -Raw)) { throw "manifest.json and plugin/manifest.json differ" }
+
+      - name: Build the plugin
+        working-directory: plugin
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
+
+      - name: Build the helper installers
+        shell: pwsh
+        run: ./installer/build.ps1
+
+      - name: Draft the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $files = @("plugin/main.js", "plugin/manifest.json", "plugin/styles.css") + (Get-ChildItem installer/output -Filter "Onesidian-helper-$tag-*.exe" | ForEach-Object { $_.FullName })
+          if ($files.Count -ne 5) { throw "expected 5 release files, got $($files.Count)" }
+          gh release create $tag @files --draft --title $tag --generate-notes
