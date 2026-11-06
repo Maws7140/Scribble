@@ -31,16 +31,13 @@ The helper installer isn't code-signed yet, so Windows may show "Windows protect
 
 Update the helper with each new version of the plugin: Scribble says when the helper doesn't match, and an installer run while Obsidian is open replaces it in place.
 
-## What it does on your computer
-
-Obsidian asks plugins to say so when they do any of the following.
+## Stuff you should know
 
 - **A separate program.** The pen ink is drawn by the ink helper (`InkOverlay.exe`), a Windows program you install separately, since plugins can't install software themselves. Scribble starts and stops it with Obsidian. Its source is in [`helper/`](helper) in this repository.
-- **Files outside your vault.** The helper lives in `%LOCALAPPDATA%\Programs\Scribble`. Next to it are its log (`helper.log`) and `backups\`, where it keeps a copy of a note's ink before a pull from OneNote replaces it. It uses Windows' temp folder while importing from OneNote.
-- **Files in your vault.** Each note's ink is saved next to it as a `.ink` file (OneNote's ink format), for example `Lecture 3.ink` beside `Lecture 3.md`.
-- **Other apps.** Syncing talks to OneNote for Windows on this computer through its own programming interface (COM). OneNote then syncs with your Microsoft account as usual. Scribble never signs in to anything itself.
+- **Helper.** The helper lives in `%LOCALAPPDATA%\Programs\Scribble`. Next to it are its log (`helper.log`) and `backups\`, where it keeps a copy of a note's ink before a pull from OneNote replaces it. It uses Windows' temp folder while importing from OneNote.
+- **INK.** Each note's ink is saved next to it as a `.ink` file (OneNote's ink format), for example `Lecture 3.ink` beside `Lecture 3.md`.
+- **Sync.** Syncing talks to OneNote for Windows on this computer through its own programming interface (COM). OneNote then syncs with your Microsoft account as usual. Scribble never signs in to anything itself.
 - **Network.** Neither the plugin nor the helper connects to the internet. The only link opens the helper's download page in your browser.
-- **No telemetry, ads or accounts.**
 
 ## Uninstall
 
