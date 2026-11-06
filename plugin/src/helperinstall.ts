@@ -11,12 +11,34 @@ export const HELPER_PROTOCOL = 1;
  */
 export const HELPER_DOWNLOAD = "https://github.com/Maws7140/Onesidian/releases/latest";
 
-export type HelperProblem = "missing" | "outdated" | "not-windows";
+/** "updating": its installer (or uninstaller) is replacing it right now; it starts again once that's done. */
+export type HelperProblem = "missing" | "outdated" | "not-windows" | "updating";
 
 /** Where the installer puts the helper: per user, so it needs no admin prompt. */
 export function installedHelperDir(): string | null {
   const local = process.env.LOCALAPPDATA;
   return local ? path.join(local, "Programs", "OneNote Ink") : null;
+}
+
+/**
+ * The installer and uninstaller put this file in the helper's folder while they work (installer/OneNoteInk.iss):
+ * the plugin stops its helper so the files can be replaced, and doesn't start one until the file's gone. One
+ * left behind by an installer that was killed is ignored after a while, so it can't keep the helper off.
+ */
+export function helperBeingUpdated(): boolean {
+  const dir = installedHelperDir();
+  if (!dir) return false;
+  try {
+    return Date.now() - fs.statSync(path.join(dir, ".updating")).mtimeMs < 10 * 60_000;
+  } catch {
+    return false;
+  }
+}
+
+/** Whether this helper is the installed one (not a development build in the plugin's folder). */
+export function isInstalledHelper(exe: string): boolean {
+  const dir = installedHelperDir();
+  return !!dir && path.resolve(path.dirname(exe)).toLowerCase() === path.resolve(dir).toLowerCase();
 }
 
 /** The helper to run: the installed one, else one in the plugin's own folder (a development build). */
@@ -48,7 +70,9 @@ export function copyOldBackups(pluginDir: string | null, exe: string) {
   }
 }
 
-const TEXT: Record<Exclude<HelperProblem, "not-windows">, { title: string; body: string }> = {
+type CardProblem = Exclude<HelperProblem, "not-windows" | "updating">;
+
+const TEXT: Record<CardProblem, { title: string; body: string }> = {
   missing: {
     title: "Install the ink helper",
     body: "OneNote Ink draws with the ink helper, a small Windows program that's installed separately. "
@@ -64,7 +88,7 @@ const TEXT: Record<Exclude<HelperProblem, "not-windows">, { title: string; body:
 
 /** The helper isn't there, or doesn't match: what to do about it. */
 export class HelperSetupModal extends Modal {
-  constructor(app: App, private problem: Exclude<HelperProblem, "not-windows">) {
+  constructor(app: App, private problem: CardProblem) {
     super(app);
   }
 

@@ -48,3 +48,106 @@ Source: "{#Source}\*"; DestDir: "{app}"; Excludes: "helper.log*,backups,*.pdb,*.
 
 [Messages]
 FinishedLabelNoIcons=The ink helper is installed. OneNote Ink in Obsidian picks it up within a few seconds; nothing else to do.
+
+[Code]
+// While installing or uninstalling, a ".updating" file in the helper's folder tells the plugin to stop its helper
+// (it saves on the way out) and not to start one until the file's gone (plugin/src/helperinstall.ts). Without it
+// the plugin restarts a helper the moment it's closed, and the new one locks the files being replaced.
+var
+  MarkerPath: String;
+
+// The helpers running from this folder (not development builds elsewhere), by process id.
+function HelperPids(): TArrayOfInteger;
+var
+  Locator, Service, Procs, P: Variant;
+  I, N: Integer;
+  Dir, Exe: String;
+begin
+  SetArrayLength(Result, 0);
+  Dir := Lowercase(AddBackslash(ExpandConstant('{app}')));
+  try
+    Locator := CreateOleObject('WbemScripting.SWbemLocator');
+    Service := Locator.ConnectServer('.', 'root\CIMV2');
+    Procs := Service.ExecQuery('SELECT ProcessId, ExecutablePath FROM Win32_Process WHERE Name = ''InkOverlay.exe''');
+    for I := 0 to Procs.Count - 1 do
+    begin
+      P := Procs.ItemIndex(I);
+      if not VarIsNull(P.ExecutablePath) then
+      begin
+        Exe := P.ExecutablePath;
+        if Pos(Dir, Lowercase(Exe)) = 1 then
+        begin
+          N := GetArrayLength(Result);
+          SetArrayLength(Result, N + 1);
+          Result[N] := P.ProcessId;
+        end;
+      end;
+    end;
+  except
+    Log('Listing running helpers failed: ' + GetExceptionMessage);
+  end;
+end;
+
+// Ask the plugin to stop the helper, give it 10 s to save and exit, then stop any that's left.
+procedure StopHelpers();
+var
+  I, Code: Integer;
+  Pids: TArrayOfInteger;
+begin
+  ForceDirectories(ExpandConstant('{app}'));
+  MarkerPath := ExpandConstant('{app}\.updating');
+  SaveStringToFile(MarkerPath, 'OneNote Ink helper installer', False);
+  for I := 1 to 40 do
+  begin
+    if GetArrayLength(HelperPids()) = 0 then
+      Exit;
+    Sleep(250);
+  end;
+  Pids := HelperPids();
+  for I := 0 to GetArrayLength(Pids) - 1 do
+  begin
+    Log('Helper ' + IntToStr(Pids[I]) + ' still running; stopping it');
+    Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /PID ' + IntToStr(Pids[I]), '', SW_HIDE, ewWaitUntilTerminated, Code);
+  end;
+  for I := 1 to 20 do
+  begin
+    if GetArrayLength(HelperPids()) = 0 then
+      Exit;
+    Sleep(250);
+  end;
+end;
+
+procedure ClearMarker();
+begin
+  if (MarkerPath <> '') and FileExists(MarkerPath) then
+    DeleteFile(MarkerPath);
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  StopHelpers();
+  Result := '';
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then
+    ClearMarker();
+end;
+
+// Also after a failed or cancelled install, so the plugin goes back to the helper that's there.
+procedure DeinitializeSetup();
+begin
+  ClearMarker();
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if CurUninstallStep = usUninstall then
+    StopHelpers();
+  if CurUninstallStep = usPostUninstall then
+  begin
+    ClearMarker();
+    RemoveDir(ExpandConstant('{app}'));
+  end;
+end;

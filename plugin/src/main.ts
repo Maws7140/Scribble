@@ -23,7 +23,7 @@ import { CanvasTouch, TouchCanvas } from "./canvastouch";
 import { ruleCanvas } from "./canvaslines";
 import { InkPrint, PrintReference, PrintStroke } from "./print";
 import { clearCoordinateProbes } from "./coordinates";
-import { HELPER_DOWNLOAD, HELPER_PROTOCOL, HelperProblem, HelperSetupModal, copyOldBackups, findHelper } from "./helperinstall";
+import { HELPER_DOWNLOAD, HELPER_PROTOCOL, HelperProblem, HelperSetupModal, copyOldBackups, findHelper, helperBeingUpdated, isInstalledHelper } from "./helperinstall";
 
 /**
  * Drives a native Windows Ink overlay (helper/InkOverlay.exe) that sits over the active note.
@@ -111,8 +111,11 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
     this.handwriting = new HandwritingIndex(this.app, `${this.manifest.dir}/handwriting-index.json`);
     this.startHelper();
     this.sendTool();
-    // Installed (or updated) while Obsidian is open: start it as soon as it's there.
-    this.registerInterval(window.setInterval(() => this.retryHelper(), 3000));
+    // Installed (or updated) while Obsidian is open: stop it while it's replaced, start it as soon as it's there.
+    this.registerInterval(window.setInterval(() => {
+      this.watchHelperUpdate();
+      this.retryHelper();
+    }, 1000));
 
     this.addSettingTab(new InkSettingTab(this.app, this));
     this.registerMarkdownPostProcessor((el, ctx) => this.printing.process(el, ctx), 10000);
@@ -573,6 +576,10 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
     }
     if (this.helperProblem === "outdated") return;
     const exe = findHelper(this.pluginDir());
+    if (exe && isInstalledHelper(exe) && helperBeingUpdated()) {
+      this.helperProblem = "updating"; // started again once the installer's done (see retryHelper)
+      return;
+    }
     if (!exe) {
       this.helperUnavailable("missing");
       return;
@@ -655,7 +662,7 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
   }
 
   /** No helper to run: say so once a session (the card for a missing or mismatched one; a notice off Windows). */
-  private helperUnavailable(problem: HelperProblem) {
+  private helperUnavailable(problem: Exclude<HelperProblem, "updating">) {
     this.helperProblem = problem;
     if (problem === "outdated") {
       const proc = this.helper;
@@ -676,6 +683,14 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
   private retryHelper() {
     if (this.unloading || this.helper || !this.helperProblem || this.helperProblem === "not-windows") return;
     const exe = findHelper(this.pluginDir());
+    if (this.helperProblem === "updating") {
+      if (exe && isInstalledHelper(exe) && helperBeingUpdated()) return;
+      // Uninstalled rather than updated: say so.
+      if (!exe) {
+        this.helperUnavailable("missing");
+        return;
+      }
+    }
     if (!exe) return;
     if (this.helperProblem === "outdated") {
       let stamp = 0;
@@ -691,6 +706,25 @@ export default class OneNoteInkPlugin extends Plugin implements ToolbarHost, Mat
     this.lastLines = "";
     this.linesDirty = true;
     this.sendTool();
+  }
+
+  /**
+   * Its installer is about to replace it (or the uninstaller to remove it): stop it the way unloading does, so it
+   * saves what's pending, and leave the files free. retryHelper starts the new one once the installer's done.
+   */
+  private watchHelperUpdate() {
+    if (this.unloading || !this.helper || !isInstalledHelper(this.helperPath) || !helperBeingUpdated()) return;
+    console.log("[onenote-ink] the ink helper is being updated; stopping it until that's done");
+    this.helperProblem = "updating";
+    window.clearTimeout(this.helloTimer);
+    for (const proc of [this.helper, this.standby]) {
+      if (!proc) continue;
+      proc.stdin.end();
+      window.setTimeout(() => { if (proc.exitCode === null) proc.kill(); }, 3000);
+    }
+    this.helper = null;
+    this.standby = null;
+    this.domInk.releaseNative();
   }
 
   /** A replacement helper, starting up next to the running one. */
@@ -2635,6 +2669,7 @@ class InkSettingTab extends PluginSettingTab {
     const status = p.helperProblem === "not-windows" ? "Needs Windows: OneNote Ink's ink is Windows Ink."
       : p.helperProblem === "missing" ? "Not installed. Download its installer and run it; the plugin picks it up within a few seconds."
       : p.helperProblem === "outdated" ? "Doesn't match this version of the plugin. Download and run the helper for this version."
+      : p.helperProblem === "updating" ? "Being updated; it starts again once its installer's done."
       : p.helperVersion ? `Version ${p.helperVersion}, running from ${p.helperPath}`
       : "Starting...";
     const helper = new Setting(containerEl).setName("Ink helper").setDesc(status);
